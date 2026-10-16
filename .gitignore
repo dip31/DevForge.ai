@@ -1,23 +1,39 @@
+# Dependencies
 node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
 dist/
 build/
-.cache/
-.env*
-.vite/
-vite.config.*.timestamp-*
 *.tsbuildinfo
-*-debug.log*
-logs/
-*.log
-.claude-replay.*
-.tmp-*
-/.figma/design-context/
-/AGENTS.md
-/CLAUDE.md
+packages/*/dist/
 
-# Platform-managed agentplat state, not project source. In the
-# client-initiated single-repo workspace layout (make's `Path: "."` spec) the
-# repo root IS the workspace root, so these land inside this repo rather than
-# beside it.
-/.plugins/
-/.opencode-skills/
+# Environment files — NEVER commit these
+.env
+.env.local
+.env.*.local
+apps/api/.env
+apps/web/.env
+apps/web/.env.local
+packages/config/.env
+
+# Supabase local config (contains DB passwords)
+supabase/.branches/
+supabase/seed.sql
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/settings.json
+
+# Test coverage
+coverage/
+.nyc_output/

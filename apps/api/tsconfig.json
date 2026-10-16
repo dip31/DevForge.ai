@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": false,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@contracts": ["../../packages/contracts/src/index.ts"],
+      "@contracts/*": ["../../packages/contracts/src/*"],
+      "@database": ["../../packages/database/src/index.ts"],
+      "@database/*": ["../../packages/database/src/*"],
+      "@config": ["../../packages/config/src/index.ts"],
+      "@config/*": ["../../packages/config/src/*"]
+    },
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": [
+    "src/**/*",
+    "../../packages/contracts/src/**/*",
+    "../../packages/database/src/**/*",
+    "../../packages/config/src/**/*"
+  ],
+  "exclude": ["node_modules", "dist"],
+  "references": [
+    { "path": "../../packages/contracts" },
+    { "path": "../../packages/database" },
+    { "path": "../../packages/config" }
+  ]
+}
