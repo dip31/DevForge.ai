@@ -17,6 +17,7 @@ import { evaluationRoutes } from "./routes/evaluations";
 import { reviewQueueRoutes } from "./routes/reviewQueue";
 import { practiceRoutes } from "./routes/practice";
 import { aiCoachRoutes } from "./routes/aiCoach";
+import { aiAgentRoutes } from "./routes/aiAgent";
 import { errorHandler } from "./middleware/errorHandler";
 import { authMiddleware } from "./middleware/auth";
 
@@ -84,6 +85,7 @@ export async function buildApp() {
     await fastify.register(reviewQueueRoutes, { prefix: "/api/v1/review-queue" });
     await fastify.register(practiceRoutes, { prefix: "/api/v1/practice" });
     await fastify.register(aiCoachRoutes, { prefix: "/api/v1/sessions" });
+    await fastify.register(aiAgentRoutes, { prefix: "/api/v1/sessions" });
   });
 
   return app;

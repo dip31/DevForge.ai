@@ -77,8 +77,46 @@ describe("generateCoachResponse", () => {
     expect(result.content).toMatch(/empty task list/i);
   });
 
-  it("falls back to guidance for unrecognized prompts", () => {
-    const result = generateCoachResponse("prompt", "hello there", context);
-    expect(result.content).toMatch(/one acceptance criterion at a time/i);
+  it("responds to a greeting with a greeting, not debugging instructions", () => {
+    const result = generateCoachResponse("prompt", "hiii", context);
+    expect(result.content).toMatch(/hi!/i);
+    expect(result.content).not.toMatch(/one acceptance criterion at a time/i);
+  });
+
+  it("treats a theme request as a limitation, not the debugging fallback", () => {
+    const result = generateCoachResponse("prompt", "make the entire theme dark", context);
+    expect(result.content).toMatch(/can't change the theme/i);
+    expect(result.content).not.toMatch(/one acceptance criterion at a time/i);
+  });
+
+  it("explains code and points at the active file", () => {
+    const result = generateCoachResponse("prompt", "explain this code", context);
+    expect(result.content).toContain("src/taskUtils.js");
+  });
+
+  it("uses diagnostic context for a debugging request", () => {
+    const result = generateCoachResponse("prompt", "help me debug this error", context);
+    expect(result.content).toContain("Filtering tasks by status");
+  });
+
+  it("does not invent test results when none are available", () => {
+    const result = generateCoachResponse("prompt", "which tests are failing?", {});
+    expect(result.content).toMatch(/don't have any stored test result/i);
+    expect(result.content).not.toContain("Filtering tasks by status");
+  });
+
+  it("asks a clarifying question for unrecognized prompts", () => {
+    const result = generateCoachResponse("prompt", "write me a haiku about clouds", context);
+    expect(result.content).toMatch(/not sure what you'd like help with/i);
+    expect(result.content).not.toMatch(/one acceptance criterion at a time/i);
+  });
+
+  it("matches intents case-insensitively with varied phrasing", () => {
+    expect(generateCoachResponse("prompt", "MAKE THE ENTIRE THEME DARK", context).content).toMatch(
+      /can't change the theme/i,
+    );
+    expect(generateCoachResponse("prompt", "Explain   THIS code!!", context).content).toContain(
+      "src/taskUtils.js",
+    );
   });
 });

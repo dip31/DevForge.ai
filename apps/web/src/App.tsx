@@ -16,6 +16,7 @@ import {
   FREE_PRACTICE_ATTEMPTS,
   CandidateAssignment,
   candidateAssignments as initialCandidateAssignments,
+  starterWorkspaceFiles,
 } from "./data";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { getErrorMessage } from "./lib/api";
@@ -3515,6 +3516,9 @@ function AppInner() {
   const persistAssessmentSession = (next: AssessmentSession) => {
     try {
       localStorage.setItem("devforge-assessment-session", JSON.stringify(next));
+      if (next.assignmentId) {
+        localStorage.setItem(`devforge-session-${next.assignmentId}`, JSON.stringify(next));
+      }
       setAssessmentSession(next);
       return true;
     } catch {
@@ -3594,12 +3598,106 @@ function AppInner() {
     const candidateAssessmentRoute = path.match(
       /^\/candidate\/assessments\/([^/]+)(?:\/(onboarding|workspace|submission))?$/,
     );
-    if (
-      candidateAssessmentRoute?.[2] === "workspace" &&
-      assessmentSession?.assignmentId === candidateAssessmentRoute[1] &&
-      !assessmentSession.submittedAt
-    )
-      return <IdeWorkspace session={assessmentSession} persist={persistAssessmentSession} />;
+    if (candidateAssessmentRoute?.[2] === "workspace") {
+      const routeAssignmentId = candidateAssessmentRoute[1];
+      const assignment = getAssignment(routeAssignmentId);
+      if (assignment) {
+        let activeSession = assessmentSession;
+        if (!activeSession || activeSession.assignmentId !== routeAssignmentId) {
+          try {
+            const raw = localStorage.getItem(`devforge-session-${routeAssignmentId}`);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (parsed?.assignmentId === routeAssignmentId) {
+                activeSession = parsed;
+              }
+            }
+          } catch {}
+        }
+        if (!activeSession || activeSession.assignmentId !== routeAssignmentId) {
+          const initialFiles = assignment.starterFiles
+            ? structuredClone(assignment.starterFiles)
+            : assignment.id === "novatech-task-manager"
+              ? structuredClone(starterWorkspaceFiles)
+              : [];
+          const firstFilePath = initialFiles[0]?.path ?? "";
+          const startedAt = new Date().toISOString();
+          activeSession = {
+            sessionId: `session-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            candidateId: (assignment as any).candidateId ?? "alex-morgan",
+            companyId: assignment.companyId,
+            assignmentId: assignment.id,
+            assessmentId: assignment.assessment || assignment.id,
+            startedAt,
+            durationMinutes: assignment.duration,
+            currentFile: firstFilePath,
+            files: initialFiles,
+            savedFiles: structuredClone(initialFiles),
+            unsaved: false,
+            revisions: [
+              {
+                id: "revision-0",
+                timestamp: startedAt,
+                files: structuredClone(initialFiles),
+              },
+            ],
+            coachMessages: [
+              {
+                id: `message-${Date.now()}`,
+                role: "coach",
+                timestamp: startedAt,
+                content:
+                  "Welcome to the AI Coach. You can ask for hints on failed tests, active file information, or debug guidance. Responses use the workspace context you can already see.",
+                explanation: "Welcome message shown when the session starts.",
+              },
+            ],
+            runHistory: [],
+            testRuns: [],
+            activity: [
+              {
+                id: `event-${Date.now()}`,
+                type: "assessment_started",
+                timestamp: startedAt,
+                detail: "Candidate entered workspace.",
+                provenance: "candidate_action",
+              },
+            ],
+            taskDetails: assignment.taskDetails ?? {
+              title: assignment.task,
+              description: assignment.description,
+              company: assignment.company,
+              role: assignment.assessment,
+              skills: Array.isArray(assignment.skills)
+                ? assignment.skills.join(", ")
+                : assignment.skills,
+              durationMinutes: assignment.duration,
+              difficulty: assignment.difficulty,
+              instructions: assignment.instructions ?? null,
+              aiPolicy: assignment.aiPolicy ?? null,
+              requirements:
+                assignment.id === "novatech-task-manager"
+                  ? [
+                      "Add a task",
+                      "Set task priority",
+                      "Mark a task complete",
+                      "Filter tasks by status",
+                      "Display an empty state",
+                      "Preserve task state during interaction",
+                    ]
+                  : assignment.skills,
+              allowedImports: [],
+              starterFiles: initialFiles.map((f) => ({
+                path: f.path,
+                language: f.language,
+                isReadOnly: f.readOnly,
+              })),
+            },
+          };
+          persistAssessmentSession(activeSession);
+        }
+        return <IdeWorkspace session={activeSession} persist={persistAssessmentSession} />;
+      }
+    }
     const practiceTaskRoute = path.match(/^\/candidate\/practice\/([^/]+)(?:\/(workspace))?$/);
 
     const practicePersist = (session: AssessmentSession) => {

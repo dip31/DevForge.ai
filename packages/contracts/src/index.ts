@@ -10,3 +10,5 @@ export * from "./practice";
 export * from "./billing";
 export * from "./notifications";
 export * from "./ai";
+export * from "./coach";
+export * from "./agent";

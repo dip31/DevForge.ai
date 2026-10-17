@@ -171,7 +171,32 @@ export async function assignmentRoutes(fastify: FastifyInstance) {
       where: (a, { eq }) => eq(a.candidateId, user.id),
       orderBy: (a, { desc }) => [desc(a.createdAt)],
     });
-    return reply.send({ success: true, data: assignments });
+
+    const enriched = await Promise.all(
+      assignments.map(async (assignment) => {
+        const version = await db.query.assessmentVersions.findFirst({
+          where: (v, { eq }) => eq(v.id, assignment.assessmentVersionId),
+        });
+        const assessment = await db.query.assessments.findFirst({
+          where: (a, { eq }) => eq(a.id, assignment.assessmentId),
+        });
+        return {
+          ...assignment,
+          taskDetails: {
+            title: version?.title ?? assessment?.title,
+            description: version?.description ?? assessment?.description,
+            role: version?.role ?? assessment?.role,
+            skills: version?.skills ?? assessment?.skills,
+            durationMinutes: version?.durationMinutes ?? assessment?.durationMinutes,
+            difficulty: version?.difficulty ?? assessment?.difficulty,
+            instructions: version?.instructions,
+            aiPolicy: version?.aiPolicy,
+          },
+        };
+      }),
+    );
+
+    return reply.send({ success: true, data: enriched });
   });
 
   // GET /:id
@@ -204,7 +229,28 @@ export async function assignmentRoutes(fastify: FastifyInstance) {
       }
     }
 
-    return reply.send({ success: true, data: assignment });
+    const version = await db.query.assessmentVersions.findFirst({
+      where: (v, { eq }) => eq(v.id, assignment.assessmentVersionId),
+    });
+    const assessment = await db.query.assessments.findFirst({
+      where: (a, { eq }) => eq(a.id, assignment.assessmentId),
+    });
+
+    const responseData = {
+      ...assignment,
+      taskDetails: {
+        title: version?.title ?? assessment?.title,
+        description: version?.description ?? assessment?.description,
+        role: version?.role ?? assessment?.role,
+        skills: version?.skills ?? assessment?.skills,
+        durationMinutes: version?.durationMinutes ?? assessment?.durationMinutes,
+        difficulty: version?.difficulty ?? assessment?.difficulty,
+        instructions: version?.instructions,
+        aiPolicy: version?.aiPolicy,
+      },
+    };
+
+    return reply.send({ success: true, data: responseData });
   });
 
   // PATCH /:id

@@ -8,9 +8,13 @@ import {
   starterWorkspaceFiles,
   TestResult,
   WorkspaceFile,
+  AgentOperationView,
 } from "./data";
-import { aiCoachApi } from "./lib/api-endpoints";
+import { aiCoachApi, aiAgentApi } from "./lib/api-endpoints";
+import { isApiError, getErrorMessage } from "./lib/api";
 import type { AiCoachContext } from "@contracts/ai";
+import type { AgentOperation } from "@contracts/agent";
+import { generateCoachResponse, type CoachAction } from "@contracts/coach";
 import "./workspace.css";
 
 type PersistSession = (session: AssessmentSession) => boolean;
@@ -21,6 +25,21 @@ export type UpdateSession = (
 export const now = () => new Date().toISOString();
 export const uid = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+function languageExt(path: string): string {
+  const ext = path.includes(".") ? path.split(".").pop()!.toLowerCase() : "";
+  const map: Record<string, string> = {
+    js: "javascript",
+    jsx: "jsx",
+    ts: "typescript",
+    tsx: "tsx",
+    json: "json",
+    md: "markdown",
+    css: "css",
+    html: "html",
+  };
+  return map[ext] ?? "text";
+}
 
 function go(path: string) {
   window.history.pushState({}, "", path);
@@ -404,6 +423,14 @@ export function AssignedAssessmentsV2({
 
 export function CandidateHistoryV2({ session }: { session: AssessmentSession | null }) {
   const submitted = session?.submittedAt;
+  const fallbackAssignment = session
+    ? candidateAssignments.find((a) => a.id === session.assignmentId)
+    : null;
+  const companyName =
+    session?.taskDetails?.company || fallbackAssignment?.company || "NovaTech Solutions";
+  const taskTitle =
+    session?.taskDetails?.title || fallbackAssignment?.task || "Build a Team Task Manager";
+  const assignmentId = session?.assignmentId || "novatech-task-manager";
   return (
     <>
       <div className="assessment-page-heading">
@@ -420,10 +447,10 @@ export function CandidateHistoryV2({ session }: { session: AssessmentSession | n
       </div>
       {submitted ? (
         <article className="history-submission card">
-          <CompanyMark company="NovaTech Solutions" />
+          <CompanyMark company={companyName} />
           <div>
-            <span>NovaTech Solutions</span>
-            <h2>Build a Team Task Manager</h2>
+            <span>{companyName}</span>
+            <h2>{taskTitle}</h2>
             <p>
               Submitted {new Date(submitted).toLocaleString()} ·{" "}
               {session.testRuns.at(-1)?.results.filter((r) => r.status === "passed").length ?? 0}
@@ -432,7 +459,7 @@ export function CandidateHistoryV2({ session }: { session: AssessmentSession | n
           </div>
           <ActionButton
             secondary
-            onClick={() => go("/candidate/assessments/novatech-task-manager/submission")}
+            onClick={() => go(`/candidate/assessments/${assignmentId}/submission`)}
           >
             View Submission
           </ActionButton>
@@ -441,10 +468,7 @@ export function CandidateHistoryV2({ session }: { session: AssessmentSession | n
         <div className="assignment-empty card">
           <WIcon name="history" size={22} />
           <h2>No submitted assessments yet</h2>
-          <p>
-            Your submitted NovaTech assessment will appear here after the confirmation flow is
-            complete.
-          </p>
+          <p>Your submitted assessment will appear here after the confirmation flow is complete.</p>
           <ActionButton onClick={() => go("/candidate/assessments")}>
             View assigned assessments
           </ActionButton>
@@ -574,37 +598,24 @@ export function AssessmentDetails({
                   ? "Your existing session and original start time will be restored."
                   : "This submission is locked and read-only."}
             </p>
-            {unavailable ? (
-              <div className="unavailable-note">
-                <WIcon name="warning" />
-                <div>
-                  <strong>Demo workspace not yet available</strong>
-                  <p>
-                    This assignment has a complete details page, but it will not open the Team Task
-                    Manager workspace.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <ActionButton
-                onClick={() =>
-                  go(
-                    status === "Submitted"
-                      ? `/candidate/assessments/${assignment.id}/submission`
-                      : status === "In Progress"
-                        ? `/candidate/assessments/${assignment.id}/workspace`
-                        : `/candidate/assessments/${assignment.id}/onboarding`,
-                  )
-                }
-              >
-                {status === "Submitted"
-                  ? "View Submission"
-                  : status === "In Progress"
-                    ? "Resume Assessment"
-                    : "Start Assessment"}
-                <WIcon name="arrow" />
-              </ActionButton>
-            )}
+            <ActionButton
+              onClick={() =>
+                go(
+                  status === "Submitted"
+                    ? `/candidate/assessments/${assignment.id}/submission`
+                    : status === "In Progress"
+                      ? `/candidate/assessments/${assignment.id}/workspace`
+                      : `/candidate/assessments/${assignment.id}/onboarding`,
+                )
+              }
+            >
+              {status === "Submitted"
+                ? "View Submission"
+                : status === "In Progress"
+                  ? "Resume Assessment"
+                  : "Start Assessment"}
+              <WIcon name="arrow" />
+            </ActionButton>
           </section>
           <p className="detail-demo-copy">
             Company names, deadlines, and invitations are illustrative demo data. No actual
@@ -631,6 +642,13 @@ export function AssessmentOnboarding({
       go(`/candidate/assessments/${assignment.id}/workspace`);
       return;
     }
+    const initialFiles: WorkspaceFile[] = assignment.starterFiles
+      ? structuredClone(assignment.starterFiles)
+      : assignment.id === "novatech-task-manager"
+        ? structuredClone(starterWorkspaceFiles)
+        : [];
+    const firstFilePath = initialFiles[0]?.path ?? "";
+
     const startedAt = now();
     const event: ActivityEvent = {
       id: uid("event"),
@@ -639,31 +657,64 @@ export function AssessmentOnboarding({
       detail: "Candidate acknowledged the rules and began the assessment.",
       provenance: "candidate_action",
     };
-    const openedEvent: ActivityEvent = {
-      id: uid("event"),
-      type: "file_opened",
-      timestamp: startedAt,
-      file: "src/App.jsx",
-      detail: "Opened the initial workspace file.",
-      provenance: "system_generated",
+    const activityList: ActivityEvent[] = [event];
+    if (firstFilePath) {
+      activityList.push({
+        id: uid("event"),
+        type: "file_opened",
+        timestamp: startedAt,
+        file: firstFilePath,
+        detail: "Opened the initial workspace file.",
+        provenance: "system_generated",
+      });
+    }
+
+    const taskDetails = assignment.taskDetails ?? {
+      title: assignment.task,
+      description: assignment.description,
+      company: assignment.company,
+      role: assignment.assessment,
+      skills: Array.isArray(assignment.skills) ? assignment.skills.join(", ") : assignment.skills,
+      durationMinutes: assignment.duration,
+      difficulty: assignment.difficulty,
+      instructions: assignment.instructions ?? null,
+      aiPolicy: assignment.aiPolicy ?? null,
+      requirements:
+        assignment.id === "novatech-task-manager"
+          ? [
+              "Add a task",
+              "Set task priority",
+              "Mark a task complete",
+              "Filter tasks by status",
+              "Display an empty state",
+              "Preserve task state during interaction",
+            ]
+          : assignment.skills,
+      allowedImports: [],
+      starterFiles: initialFiles.map((f) => ({
+        path: f.path,
+        language: f.language,
+        isReadOnly: f.readOnly,
+      })),
     };
+
     const next: AssessmentSession = {
       sessionId: uid("session"),
-      candidateId: "alex-morgan",
+      candidateId: (assignment as any).candidateId ?? "alex-morgan",
       companyId: assignment.companyId,
       assignmentId: assignment.id,
-      assessmentId: "frontend-developer-coding-challenge",
+      assessmentId: assignment.assessment || assignment.id,
       startedAt,
       durationMinutes: assignment.duration,
-      currentFile: "src/App.jsx",
-      files: structuredClone(starterWorkspaceFiles),
-      savedFiles: structuredClone(starterWorkspaceFiles),
+      currentFile: firstFilePath,
+      files: initialFiles,
+      savedFiles: structuredClone(initialFiles),
       unsaved: false,
       revisions: [
         {
           id: "revision-0",
           timestamp: startedAt,
-          files: structuredClone(starterWorkspaceFiles),
+          files: structuredClone(initialFiles),
         },
       ],
       coachMessages: [
@@ -672,14 +723,14 @@ export function AssessmentOnboarding({
           role: "coach",
           timestamp: startedAt,
           content:
-            "Welcome to the local demo coach. I can help you reason about the requirements, explain the active file, or diagnose supported test failures. I will never change code without your explicit action.",
-          explanation:
-            "This response is deterministic and generated locally from the assessment context.",
+            "Welcome to the AI Coach. You can ask for hints on failed tests, active file information, or debug guidance. Responses use the workspace context you can already see.",
+          explanation: "Welcome message shown when the session starts.",
         },
       ],
       runHistory: [],
       testRuns: [],
-      activity: [event, openedEvent],
+      activity: activityList,
+      taskDetails,
     };
     if (persist(next)) go(`/candidate/assessments/${assignment.id}/workspace`);
   };
@@ -693,23 +744,32 @@ export function AssessmentOnboarding({
         <CompanyMark company={assignment.company} />
         <span>Before you begin</span>
         <h1>Review the task and recording disclosure.</h1>
-        <p>Your 45-minute timer starts only after you acknowledge the rules and begin.</p>
+        <p>
+          Your {assignment.duration}-minute timer starts only after you acknowledge the rules and
+          begin.
+        </p>
       </header>
       <div className="onboarding-grid">
         <main>
           <section className="card onboarding-section">
             <span className="section-index">01</span>
             <h2>Task requirements</h2>
-            <p>Build a Team Task Manager that supports the following visible behavior.</p>
+            <p>{assignment.description}</p>
             <div className="criteria-grid">
-              {[
-                "Add a task",
-                "Set task priority",
-                "Mark a task complete",
-                "Filter tasks by status",
-                "Display an empty state",
-                "Preserve task state during interaction",
-              ].map((item) => (
+              {(assignment.taskDetails?.requirements &&
+              assignment.taskDetails.requirements.length > 0
+                ? assignment.taskDetails.requirements
+                : assignment.id === "novatech-task-manager"
+                  ? [
+                      "Add a task",
+                      "Set task priority",
+                      "Mark a task complete",
+                      "Filter tasks by status",
+                      "Display an empty state",
+                      "Preserve task state during interaction",
+                    ]
+                  : assignment.skills
+              ).map((item) => (
                 <div key={item}>
                   <WIcon name="check" />
                   {item}
@@ -850,76 +910,16 @@ export function coachResponse(
   prompt: string,
   session: AssessmentSession,
 ): CoachMessage {
-  const latestFailed = session.testRuns
-    .at(-1)
-    ?.results.find((result) => result.status === "failed");
-  const active = session.files.find((file) => file.path === session.currentFile);
-  let content = "";
-  let explanation = "";
-  let suggestion: CoachMessage["suggestion"];
-  if (action === "hint") {
-    content = latestFailed
-      ? `Start with “${latestFailed.name}.” ${latestFailed.diagnostic} Make the smallest change, then save and rerun the supported checks.`
-      : "Start by connecting one acceptance criterion to one small function. Save the revision, run the public checks, and use the first concrete failure to guide the next change.";
-    explanation =
-      "I reviewed the latest deterministic test result and selected the first actionable gap.";
-  } else if (action === "explain") {
-    content = `${active?.path ?? "The active file"} currently contains ${active?.content.split("\n").length ?? 0} lines. The starter separates UI state in App.jsx from task transformations in taskUtils.js, which makes the supported behaviors easier to test independently.`;
-    explanation =
-      "I used the active filename, source length, and starter-project architecture. No hidden reasoning or remote model was used.";
-  } else if (action === "debug") {
-    content = latestFailed
-      ? `The latest failure is “${latestFailed.name}.” The runner reports: ${latestFailed.diagnostic}`
-      : "There is no failed supported check yet. Run Tests first so I can respond to a concrete diagnostic.";
-    explanation = "I inspected the most recent locally stored test result.";
-    if (latestFailed?.id === "filter")
-      suggestion = {
-        file: "src/taskUtils.js",
-        label: "Insert filter implementation",
-        content: `export function filterTasks(tasks, filter) {
-  if (filter === "active") {
-    return tasks.filter((task) => !task.completed);
-  }
-  if (filter === "completed") {
-    return tasks.filter((task) => task.completed);
-  }
-  return tasks;
-}`,
-      };
-  } else {
-    const lower = prompt.toLowerCase();
-    if (lower.includes("filter")) {
-      content =
-        "Keep filtering as a pure transformation: return active tasks when the filter is active, completed tasks when it is completed, and the original collection for all. Then run the deterministic checks.";
-      suggestion = {
-        file: "src/taskUtils.js",
-        label: "Insert filter implementation",
-        content: `export function filterTasks(tasks, filter) {
-  if (filter === "active") return tasks.filter((task) => !task.completed);
-  if (filter === "completed") return tasks.filter((task) => task.completed);
-  return tasks;
-}`,
-      };
-    } else if (lower.includes("empty"))
-      content =
-        "Treat an empty task list and an empty filtered result as valid UI states. Render a short message where the list would normally appear, rather than treating it as an execution error.";
-    else if (lower.includes("test"))
-      content = latestFailed
-        ? `Your latest supported failure is “${latestFailed.name}.” ${latestFailed.diagnostic}`
-        : "Run Tests to create a revision-linked result. I can then help interpret the first supported failure.";
-    else
-      content =
-        "Break the request into one acceptance criterion at a time. Tell me which file or failing behavior you want to inspect, or use Hint, Explain Code, or Debug Error.";
-    explanation =
-      "This deterministic response uses keywords from your prompt, the active file, and the most recent supported test result.";
-  }
+  const result = generateCoachResponse(action as CoachAction, prompt, buildCoachContext(session));
   return {
     id: uid("message"),
     role: "coach",
-    content: `${content} (Demo coach response)`,
+    content: `${result.content} (Preview — no live model)`,
     timestamp: now(),
-    explanation,
-    suggestion,
+    explanation: result.explanation,
+    suggestion: result.suggestion,
+    provider: "local",
+    model: "deterministic-v1",
   };
 }
 
@@ -927,6 +927,8 @@ export function buildCoachContext(session: AssessmentSession): AiCoachContext {
   return {
     currentFile: session.currentFile,
     files: session.files.map((file) => ({ path: file.path, content: file.content })),
+    instructions: session.taskDetails?.instructions ?? undefined,
+    requirements: session.taskDetails?.requirements,
     testResults: session.testRuns.at(-1)?.results.map((result) => ({
       id: result.id,
       name: result.name,
@@ -1240,8 +1242,18 @@ export function CoachPanel({
   const [processing, setProcessing] = useState("");
   const [expanded, setExpanded] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState(false);
+  const [coachStatus, setCoachStatus] = useState<"idle" | "groq" | "preview" | "offline" | "error">(
+    "idle",
+  );
+  const [coachModel, setCoachModel] = useState("");
+  // Guards against duplicate submissions: React state updates are async, so a
+  // double-click could otherwise fire two overlapping runs before `processing`
+  // renders. A ref flips synchronously.
+  const inFlightRef = useRef(false);
   const runCoach = async (action: string, text = prompt) => {
+    if (inFlightRef.current) return;
     if (!text.trim() && action === "prompt") return;
+    inFlightRef.current = true;
     const candidateMessage: CoachMessage = {
       id: uid("message"),
       role: "candidate",
@@ -1278,23 +1290,70 @@ export function CoachPanel({
           : "Reviewing task context.",
     );
     const context = buildCoachContext(session);
+    const history = session.coachMessages
+      .slice(-16)
+      .map((message) => ({
+        role: message.role === "candidate" ? ("user" as const) : ("assistant" as const),
+        content: message.content,
+      }))
+      .filter((turn) => turn.content.trim().length > 0);
     let response: CoachMessage;
     try {
       const { data } = await aiCoachApi.prompt(session.sessionId, {
         action,
         prompt: action === "prompt" ? text.trim() : undefined,
         context,
+        history,
       });
-      response = {
-        id: data.id,
-        role: "coach",
-        content: data.content,
-        timestamp: data.createdAt,
-        explanation: data.explanation ?? undefined,
-        suggestion: data.suggestion ?? undefined,
-      };
-    } catch {
-      response = coachResponse(action, text, session);
+      if (data.provider === "groq") {
+        response = {
+          id: data.id,
+          role: "coach",
+          content: data.content,
+          timestamp: data.createdAt,
+          provider: data.provider,
+          model: data.model,
+        };
+        setCoachStatus("groq");
+      } else {
+        response = {
+          id: data.id,
+          role: "coach",
+          content: data.content,
+          timestamp: data.createdAt,
+          explanation: data.explanation ?? undefined,
+          suggestion: data.suggestion ?? undefined,
+          provider: data.provider,
+          model: data.model,
+        };
+        setCoachStatus("preview");
+      }
+      setCoachModel(data.model);
+    } catch (error) {
+      if (isApiError(error)) {
+        // The server answered honestly (policy blocked, provider unavailable,
+        // rate limited, upstream error). Surface it instead of faking a reply.
+        response = {
+          id: uid("message"),
+          role: "coach",
+          content: `AI Coach error: ${getErrorMessage(error)}`,
+          timestamp: now(),
+          isError: true,
+          retryAction: action,
+          retryText: text,
+        };
+        setCoachStatus("error");
+      } else {
+        // No backend reachable (for example the offline preview). Fall back to
+        // the deterministic engine and label it so it is never mistaken for a
+        // live model response.
+        const fallback = coachResponse(action, text, session);
+        response = {
+          ...fallback,
+          content: `${fallback.content} (Offline preview — backend unreachable)`,
+        };
+        setCoachStatus("offline");
+      }
     }
     update((latest) => {
       const responded: ActivityEvent = {
@@ -1302,7 +1361,11 @@ export function CoachPanel({
         type: "ai_coach_responded",
         timestamp: response.timestamp,
         file: latest.currentFile,
-        detail: "Deterministic coach responded.",
+        detail: response.isError
+          ? "AI Coach request failed."
+          : response.provider === "groq"
+            ? "Groq AI Coach responded."
+            : "Deterministic coach responded.",
         provenance: "system_generated",
       };
       return {
@@ -1312,6 +1375,192 @@ export function CoachPanel({
       };
     });
     setProcessing("");
+    inFlightRef.current = false;
+  };
+  const runAgent = async (text = prompt) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    const request =
+      text.trim() ||
+      "Inspect my workspace and implement the missing functionality described in the task.";
+    const candidateMessage: CoachMessage = {
+      id: uid("message"),
+      role: "candidate",
+      content: request,
+      timestamp: now(),
+    };
+    const prompted: ActivityEvent = {
+      id: uid("event"),
+      type: "ai_coach_prompted",
+      timestamp: now(),
+      file: session.currentFile,
+      detail: "Requested AI coding agent run.",
+      provenance: "candidate_action",
+    };
+    update({
+      ...session,
+      coachMessages: [...session.coachMessages, candidateMessage],
+      activity: [...session.activity, prompted],
+    });
+    setPrompt("");
+    setProcessing("Planning and applying workspace changes.");
+    const context = buildCoachContext(session);
+    const history = session.coachMessages
+      .slice(-16)
+      .map((message) => ({
+        role: message.role === "candidate" ? ("user" as const) : ("assistant" as const),
+        content: message.content,
+      }))
+      .filter((turn) => turn.content.trim().length > 0);
+    let response: CoachMessage;
+    try {
+      const { data } = await aiAgentApi.run(session.sessionId, {
+        prompt: request,
+        context,
+        history,
+      });
+      const operations: AgentOperationView[] = (data.operations ?? []).map((op) => ({
+        id: op.id,
+        kind: op.kind,
+        path: op.path,
+        content: op.content ?? null,
+        status: op.status,
+        requiresApproval: op.requiresApproval,
+        error: op.error ?? null,
+      }));
+      response = {
+        id: data.id,
+        role: "coach",
+        content: data.content,
+        timestamp: data.createdAt,
+        provider: data.provider,
+        model: data.model,
+        operations,
+        persisted: data.persisted,
+        stopReason: data.stopReason,
+      };
+      setCoachStatus(data.provider === "groq" ? "groq" : "preview");
+      setCoachModel(data.model);
+      // Reflect completed file changes in the IDE immediately.
+      const applied = operations.filter(
+        (op) =>
+          op.status === "applied" &&
+          (op.kind === "create_file" || op.kind === "edit_file") &&
+          typeof op.content === "string",
+      );
+      if (applied.length > 0) {
+        update((latest) => {
+          const files = [...latest.files];
+          for (const op of applied) {
+            const index = files.findIndex((file) => file.path === op.path);
+            if (index >= 0) files[index] = { ...files[index], content: op.content as string };
+            else
+              files.push({
+                path: op.path,
+                content: op.content as string,
+                language: languageExt(op.path),
+              });
+          }
+          return {
+            ...latest,
+            files,
+            currentFile: applied[applied.length - 1].path,
+            unsaved: true,
+            activity: [
+              ...latest.activity,
+              {
+                id: uid("event"),
+                type: "code_changed",
+                timestamp: now(),
+                file: applied.map((op) => op.path).join(", "),
+                detail: `AI agent applied ${applied.length} file change(s).`,
+                provenance: "system_generated" as const,
+              },
+            ],
+          };
+        });
+      }
+    } catch (error) {
+      if (isApiError(error)) {
+        response = {
+          id: uid("message"),
+          role: "coach",
+          content: `AI Agent error: ${getErrorMessage(error)}`,
+          timestamp: now(),
+          isError: true,
+          retryAction: "agent",
+          retryText: text,
+        };
+        setCoachStatus("error");
+      } else {
+        response = {
+          id: uid("message"),
+          role: "coach",
+          content: "AI Agent is unreachable (backend offline). No changes were applied.",
+          timestamp: now(),
+          isError: true,
+          retryAction: "agent",
+          retryText: text,
+        };
+        setCoachStatus("offline");
+      }
+    }
+    update((latest) => ({
+      ...latest,
+      coachMessages: [...latest.coachMessages, response],
+      activity: [
+        ...latest.activity,
+        {
+          id: uid("event"),
+          type: "ai_coach_responded",
+          timestamp: response.timestamp,
+          file: latest.currentFile,
+          detail: response.isError ? "AI agent request failed." : "AI coding agent responded.",
+          provenance: "system_generated" as const,
+        },
+      ],
+    }));
+    setProcessing("");
+    inFlightRef.current = false;
+  };
+  const approveOperations = async (message: CoachMessage) => {
+    const pending = (message.operations ?? []).filter((op) => op.status === "pending");
+    if (pending.length === 0 || session.submittedAt) return;
+    if (message.persisted) {
+      try {
+        await aiAgentApi.apply(session.sessionId, pending as unknown as AgentOperation[]);
+      } catch {
+        return;
+      }
+    }
+    const deletedPaths = pending.filter((op) => op.kind === "delete_file").map((op) => op.path);
+    const targetId = message.id;
+    update((latest) => ({
+      ...latest,
+      files: latest.files.filter((file) => !deletedPaths.includes(file.path)),
+      coachMessages: latest.coachMessages.map((existing) =>
+        existing.id === targetId
+          ? {
+              ...existing,
+              operations: existing.operations?.map((op) =>
+                op.status === "pending" ? { ...op, status: "applied" as const } : op,
+              ),
+            }
+          : existing,
+      ),
+      unsaved: true,
+      activity: [
+        ...latest.activity,
+        {
+          id: uid("event"),
+          type: "code_changed",
+          timestamp: now(),
+          file: deletedPaths.join(", "),
+          detail: `Candidate approved ${pending.length} AI agent operation(s).`,
+          provenance: "candidate_action" as const,
+        },
+      ],
+    }));
   };
   const apply = (message: CoachMessage) => {
     if (!message.suggestion || session.submittedAt) return;
@@ -1343,20 +1592,26 @@ export function CoachPanel({
       ],
     });
   };
-  const criteria = [
-    "Add a task",
-    "Set task priority",
-    "Mark a task complete",
-    "Filter tasks by status",
-    "Display an empty state",
-    "Preserve task state during interaction",
-  ];
+  const criteria =
+    session.taskDetails?.requirements && session.taskDetails.requirements.length > 0
+      ? session.taskDetails.requirements
+      : session.assignmentId === "novatech-task-manager"
+        ? [
+            "Add a task",
+            "Set task priority",
+            "Mark a task complete",
+            "Filter tasks by status",
+            "Display an empty state",
+            "Preserve task state during interaction",
+          ]
+        : [];
   const passed = new Set(
     session.testRuns
       .at(-1)
       ?.results.filter((result) => result.status === "passed")
       .map((result) => result.criterion) ?? [],
   );
+  const isReadOnly = !!session.submittedAt || !!session.isReadOnly;
   if (collapsed)
     return (
       <aside className="coach-panel collapsed">
@@ -1395,7 +1650,16 @@ export function CoachPanel({
           <div>
             <strong>AI Coach</strong>
             <small>
-              <i></i>Deterministic · Connected
+              <i></i>
+              {coachStatus === "groq"
+                ? `Groq${coachModel ? ` · ${coachModel}` : ""}`
+                : coachStatus === "preview"
+                  ? "Preview mode · No live model"
+                  : coachStatus === "error"
+                    ? "Unavailable · See chat for details"
+                    : coachStatus === "offline"
+                      ? "Offline preview · No backend"
+                      : "Ready"}
             </small>
           </div>
         </div>
@@ -1421,22 +1685,40 @@ export function CoachPanel({
           <WIcon name="x" />
         </button>
       </header>
-      <div className="coach-checklist">
-        <div>
-          <strong>Acceptance criteria</strong>
-          <span>{passed.size}/6 supported</span>
-        </div>
-        {criteria.map((item) => (
-          <div className={passed.has(item) ? "verified" : ""} key={item}>
-            <span>{passed.has(item) ? <WIcon name="check" /> : ""}</span>
-            <p>{item}</p>
-            <small>{passed.has(item) ? "Test-supported" : "Pending"}</small>
+      {criteria.length > 0 ? (
+        <div className="coach-checklist">
+          <div>
+            <strong>Acceptance criteria</strong>
+            <span>
+              {passed.size}/{criteria.length} supported
+            </span>
           </div>
-        ))}
-      </div>
+          {criteria.map((item) => (
+            <div className={passed.has(item) ? "verified" : ""} key={item}>
+              <span>{passed.has(item) ? <WIcon name="check" /> : ""}</span>
+              <p>{item}</p>
+              <small>{passed.has(item) ? "Test-supported" : "Pending"}</small>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="coach-checklist">
+          <div>
+            <strong>Assessment guidance</strong>
+            <span>Rule-based preview</span>
+          </div>
+          <div className="verified">
+            <span>
+              <WIcon name="info" />
+            </span>
+            <p>Task instructions and requirements guide your implementation.</p>
+            <small>Active</small>
+          </div>
+        </div>
+      )}
       <div className="coach-messages">
         {session.coachMessages.map((message) => (
-          <article className={message.role} key={message.id}>
+          <article className={`${message.role}${message.isError ? " error" : ""}`} key={message.id}>
             <div>
               <strong>{message.role === "coach" ? "Coach" : "You"}</strong>
               <small>
@@ -1447,6 +1729,50 @@ export function CoachPanel({
               </small>
             </div>
             <p>{message.content}</p>
+            {message.isError && message.retryAction && (
+              <button
+                className="coach-retry"
+                onClick={() =>
+                  message.retryAction === "agent"
+                    ? runAgent(message.retryText ?? "")
+                    : runCoach(message.retryAction!, message.retryText ?? "")
+                }
+                disabled={isReadOnly || !!processing}
+              >
+                Retry
+              </button>
+            )}
+            {message.operations && message.operations.length > 0 && (
+              <div className="coach-operations">
+                <span>File operations</span>
+                {message.operations.map((op) => (
+                  <div className={`coach-op ${op.status}`} key={op.id}>
+                    <code>{op.kind.replace("_", " ")}</code>
+                    <span className="coach-op-path">{op.path}</span>
+                    <small>{op.status}</small>
+                  </div>
+                ))}
+                {message.operations.some((op) => op.status === "pending") && (
+                  <button
+                    className="coach-apply-ops"
+                    onClick={() => approveOperations(message)}
+                    disabled={isReadOnly}
+                  >
+                    Approve {message.operations.filter((op) => op.status === "pending").length}{" "}
+                    change(s)
+                  </button>
+                )}
+              </div>
+            )}
+            {message.stopReason && message.stopReason !== "completed" && (
+              <div className="coach-warning">
+                {message.stopReason === "provider_error"
+                  ? "The AI provider stopped responding before this run finished. Changes listed above are the only ones that actually happened."
+                  : message.stopReason === "no_progress"
+                    ? "The agent stopped because it was repeating the same step. No further changes were made."
+                    : "The agent reached its step limit. Only the changes listed above were applied."}
+              </div>
+            )}
             {message.explanation && (
               <>
                 <button
@@ -1471,7 +1797,7 @@ export function CoachPanel({
               <div className="coach-suggestion">
                 <span>Suggested change · {message.suggestion.file}</span>
                 <code>{message.suggestion.content.slice(0, 105)}…</code>
-                <button onClick={() => apply(message)} disabled={!!session.submittedAt}>
+                <button onClick={() => apply(message)} disabled={isReadOnly}>
                   Review and apply
                 </button>
               </div>
@@ -1490,27 +1816,53 @@ export function CoachPanel({
       </div>
       <div className="coach-compose">
         <div className="coach-quick">
-          <button onClick={() => runCoach("hint")}>Hint</button>
-          <button onClick={() => runCoach("explain")}>Explain Code</button>
-          <button onClick={() => runCoach("debug")}>Debug Error</button>
+          <button onClick={() => runCoach("hint")} disabled={isReadOnly || !!processing}>
+            Hint
+          </button>
+          <button onClick={() => runCoach("explain")} disabled={isReadOnly || !!processing}>
+            Explain Code
+          </button>
+          <button onClick={() => runCoach("debug")} disabled={isReadOnly || !!processing}>
+            Debug Error
+          </button>
+          <button
+            className="coach-agent"
+            onClick={() => runAgent()}
+            disabled={isReadOnly || !!processing}
+            title="Let the AI coding agent inspect your workspace and apply file changes"
+          >
+            Implement with AI
+          </button>
         </div>
         <div>
           <textarea
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
-            placeholder="Ask about the task or active file…"
+            placeholder={
+              isReadOnly
+                ? "Assessment session is read-only."
+                : "Ask a question, or tell me what to build in your workspace…"
+            }
             aria-label="Message AI Coach"
-            disabled={!!session.submittedAt}
+            disabled={isReadOnly || !!processing}
           />
           <button
-            onClick={() => runCoach("prompt")}
-            disabled={!prompt.trim() || !!processing || !!session.submittedAt}
+            onClick={() => runAgent()}
+            disabled={!prompt.trim() || !!processing || isReadOnly}
             title="Send message"
           >
             <WIcon name="send" />
           </button>
         </div>
-        <small>Deterministic coach served by the API. No external model configured.</small>
+        <small>
+          {coachStatus === "groq"
+            ? "Responses are generated by a live language model using your workspace context."
+            : coachStatus === "preview"
+              ? "Deterministic preview from the server — no live model is configured."
+              : coachStatus === "offline"
+                ? "Backend unreachable — showing a labelled deterministic preview."
+                : "Connects to the AI provider on your first message."}
+        </small>
       </div>
     </aside>
   );
@@ -2008,6 +2360,9 @@ export function CodingWorkspace({
 
 export function SubmissionConfirmation({ session }: { session: AssessmentSession }) {
   const latest = session.testRuns.at(-1);
+  const fallbackAssignment = candidateAssignments.find((a) => a.id === session.assignmentId);
+  const companyName = session.taskDetails?.company || fallbackAssignment?.company || "DevForge";
+  const taskTitle = session.taskDetails?.title || fallbackAssignment?.task || "Assessment";
   return (
     <div className="submission-page">
       <div className="submission-card">
@@ -2021,10 +2376,10 @@ export function SubmissionConfirmation({ session }: { session: AssessmentSession
           in Phase 2.
         </p>
         <div className="submission-company">
-          <CompanyMark company="NovaTech Solutions" />
+          <CompanyMark company={companyName} />
           <div>
-            <span>NovaTech Solutions</span>
-            <strong>Build a Team Task Manager</strong>
+            <span>{companyName}</span>
+            <strong>{taskTitle}</strong>
           </div>
         </div>
         <div className="submission-facts">

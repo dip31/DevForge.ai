@@ -1,6 +1,12 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../services/database";
-import { assessmentSessions, candidateAssignments, assessmentVersions } from "@database/schema";
+import {
+  assessmentSessions,
+  candidateAssignments,
+  assessmentVersions,
+  assessmentFiles,
+  sessionFiles,
+} from "@database/schema";
 import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { startSessionRequestSchema } from "@contracts/assignments";
@@ -49,7 +55,47 @@ export async function sessionRoutes(fastify: FastifyInstance) {
           },
         });
       }
-      return reply.send({ success: true, data: existingSession });
+      let activeSession = existingSession;
+      if (
+        existingSession.status === "in_progress" &&
+        existingSession.expiresAt &&
+        new Date() > new Date(existingSession.expiresAt)
+      ) {
+        const [expired] = await db
+          .update(assessmentSessions)
+          .set({ status: "expired", timeRemainingSeconds: 0, updatedAt: new Date() })
+          .where(eq(assessmentSessions.id, existingSession.id))
+          .returning();
+        activeSession = expired;
+      }
+
+      const [existingAssignment, existingVersion] = await Promise.all([
+        db.query.candidateAssignments.findFirst({
+          where: (a, { eq }) => eq(a.id, activeSession.assignmentId),
+        }),
+        db.query.assessmentVersions.findFirst({
+          where: (v, { eq }) => eq(v.id, activeSession.assessmentVersionId),
+        }),
+      ]);
+      const existingAssessment = existingAssignment
+        ? await db.query.assessments.findFirst({
+            where: (a, { eq }) => eq(a.id, existingAssignment.assessmentId),
+          })
+        : null;
+
+      const taskDetails = {
+        title: existingVersion?.title ?? existingAssessment?.title,
+        description: existingVersion?.description ?? existingAssessment?.description,
+        role: existingVersion?.role ?? existingAssessment?.role,
+        skills: existingVersion?.skills ?? existingAssessment?.skills,
+        durationMinutes: existingVersion?.durationMinutes ?? existingAssessment?.durationMinutes,
+        difficulty: existingVersion?.difficulty ?? existingAssessment?.difficulty,
+        instructions: existingVersion?.instructions,
+        aiPolicy: existingVersion?.aiPolicy,
+      };
+
+      const isReadOnly = activeSession.status === "submitted" || activeSession.status === "expired";
+      return reply.send({ success: true, data: { ...activeSession, taskDetails, isReadOnly } });
     }
 
     const version = await db.query.assessmentVersions.findFirst({
@@ -75,12 +121,153 @@ export async function sessionRoutes(fastify: FastifyInstance) {
       })
       .returning();
 
+    // Seed starter files into sessionFiles if available
+    const filesToSeed: Array<{
+      path: string;
+      language: string;
+      content: string;
+      isReadOnly?: boolean;
+    }> = [];
+
+    const dbFiles = await db.query.assessmentFiles.findMany({
+      where: (f, { eq }) => eq(f.assessmentVersionId, assignment.assessmentVersionId),
+      orderBy: (f, { asc }) => [asc(f.order), asc(f.path)],
+    });
+
+    if (dbFiles.length > 0) {
+      for (const f of dbFiles) {
+        filesToSeed.push({
+          path: f.path,
+          language: f.language,
+          content: f.content,
+          isReadOnly: f.isReadOnly,
+        });
+      }
+    } else if (Array.isArray(version?.starterFiles) && version.starterFiles.length > 0) {
+      for (const f of version.starterFiles as any[]) {
+        if (f && typeof f.path === "string") {
+          filesToSeed.push({
+            path: f.path,
+            language: f.language ?? "text",
+            content: f.content ?? "",
+            isReadOnly: f.isReadOnly ?? false,
+          });
+        }
+      }
+    }
+
+    for (const file of filesToSeed) {
+      await db.insert(sessionFiles).values({
+        sessionId: session.id,
+        path: file.path,
+        language: file.language,
+        content: file.content,
+        isReadOnly: file.isReadOnly ?? false,
+      });
+    }
+
     await db
       .update(candidateAssignments)
       .set({ status: "in_progress", startedAt: now, updatedAt: now })
       .where(eq(candidateAssignments.id, assignmentId));
 
-    return reply.status(201).send({ success: true, data: session });
+    const [assignmentRecord, versionRecord] = await Promise.all([
+      db.query.candidateAssignments.findFirst({
+        where: (a, { eq }) => eq(a.id, session.assignmentId),
+      }),
+      db.query.assessmentVersions.findFirst({
+        where: (v, { eq }) => eq(v.id, session.assessmentVersionId),
+      }),
+    ]);
+    const assessmentRecord = assignmentRecord
+      ? await db.query.assessments.findFirst({
+          where: (a, { eq }) => eq(a.id, assignmentRecord.assessmentId),
+        })
+      : null;
+
+    const taskDetails = {
+      title: versionRecord?.title ?? assessmentRecord?.title,
+      description: versionRecord?.description ?? assessmentRecord?.description,
+      role: versionRecord?.role ?? assessmentRecord?.role,
+      skills: versionRecord?.skills ?? assessmentRecord?.skills,
+      durationMinutes: versionRecord?.durationMinutes ?? assessmentRecord?.durationMinutes,
+      difficulty: versionRecord?.difficulty ?? assessmentRecord?.difficulty,
+      instructions: versionRecord?.instructions,
+      aiPolicy: versionRecord?.aiPolicy,
+    };
+
+    return reply
+      .status(201)
+      .send({ success: true, data: { ...session, taskDetails, isReadOnly: false } });
+  });
+
+  // GET /by-assignment/:assignmentId — get active/latest session for an assignment
+  fastify.get("/by-assignment/:assignmentId", async (request, reply) => {
+    const user = (request as any).user;
+    const { assignmentId } = request.params as { assignmentId: string };
+
+    const assignment = await db.query.candidateAssignments.findFirst({
+      where: (a, { eq, and }) => and(eq(a.id, assignmentId), eq(a.candidateId, user.id)),
+    });
+    if (!assignment) {
+      return reply.status(404).send({
+        success: false,
+        error: { code: "NOT_FOUND", message: "Assignment not found" },
+      });
+    }
+
+    const session = await db.query.assessmentSessions.findFirst({
+      where: (s, { eq }) => eq(s.assignmentId, assignmentId),
+      orderBy: (s, { desc }) => [desc(s.createdAt)],
+    });
+    if (!session) {
+      return reply.status(404).send({
+        success: false,
+        error: { code: "NOT_FOUND", message: "No session found for this assignment" },
+      });
+    }
+
+    let activeSession = session;
+    if (
+      session.status === "in_progress" &&
+      session.expiresAt &&
+      new Date() > new Date(session.expiresAt)
+    ) {
+      const [expired] = await db
+        .update(assessmentSessions)
+        .set({ status: "expired", timeRemainingSeconds: 0, updatedAt: new Date() })
+        .where(eq(assessmentSessions.id, session.id))
+        .returning();
+      activeSession = expired;
+    }
+
+    const [assignmentRecord, versionRecord] = await Promise.all([
+      db.query.candidateAssignments.findFirst({
+        where: (a, { eq }) => eq(a.id, activeSession.assignmentId),
+      }),
+      db.query.assessmentVersions.findFirst({
+        where: (v, { eq }) => eq(v.id, activeSession.assessmentVersionId),
+      }),
+    ]);
+    const assessmentRecord = assignmentRecord
+      ? await db.query.assessments.findFirst({
+          where: (a, { eq }) => eq(a.id, assignmentRecord.assessmentId),
+        })
+      : null;
+
+    const taskDetails = {
+      title: versionRecord?.title ?? assessmentRecord?.title,
+      description: versionRecord?.description ?? assessmentRecord?.description,
+      role: versionRecord?.role ?? assessmentRecord?.role,
+      skills: versionRecord?.skills ?? assessmentRecord?.skills,
+      durationMinutes: versionRecord?.durationMinutes ?? assessmentRecord?.durationMinutes,
+      difficulty: versionRecord?.difficulty ?? assessmentRecord?.difficulty,
+      instructions: versionRecord?.instructions,
+      aiPolicy: versionRecord?.aiPolicy,
+    };
+
+    const isReadOnly = activeSession.status === "submitted" || activeSession.status === "expired";
+    return reply.send({ success: true, data: { ...activeSession, taskDetails, isReadOnly } });
   });
 
   // GET /:sessionId
@@ -97,7 +284,45 @@ export async function sessionRoutes(fastify: FastifyInstance) {
         error: { code: "NOT_FOUND", message: "Session not found" },
       });
     }
-    return reply.send({ success: true, data: session });
+
+    let activeSession = session;
+    // Check expiry
+    if (session.status === "in_progress" && session.expiresAt && new Date() > new Date(session.expiresAt)) {
+      const [expired] = await db
+        .update(assessmentSessions)
+        .set({ status: "expired", timeRemainingSeconds: 0, updatedAt: new Date() })
+        .where(eq(assessmentSessions.id, sessionId))
+        .returning();
+      activeSession = expired;
+    }
+
+    const [assignmentRecord, versionRecord] = await Promise.all([
+      db.query.candidateAssignments.findFirst({
+        where: (a, { eq }) => eq(a.id, activeSession.assignmentId),
+      }),
+      db.query.assessmentVersions.findFirst({
+        where: (v, { eq }) => eq(v.id, activeSession.assessmentVersionId),
+      }),
+    ]);
+    const assessmentRecord = assignmentRecord
+      ? await db.query.assessments.findFirst({
+          where: (a, { eq }) => eq(a.id, assignmentRecord.assessmentId),
+        })
+      : null;
+
+    const taskDetails = {
+      title: versionRecord?.title ?? assessmentRecord?.title,
+      description: versionRecord?.description ?? assessmentRecord?.description,
+      role: versionRecord?.role ?? assessmentRecord?.role,
+      skills: versionRecord?.skills ?? assessmentRecord?.skills,
+      durationMinutes: versionRecord?.durationMinutes ?? assessmentRecord?.durationMinutes,
+      difficulty: versionRecord?.difficulty ?? assessmentRecord?.difficulty,
+      instructions: versionRecord?.instructions,
+      aiPolicy: versionRecord?.aiPolicy,
+    };
+
+    const isReadOnly = activeSession.status === "submitted" || activeSession.status === "expired";
+    return reply.send({ success: true, data: { ...activeSession, taskDetails, isReadOnly } });
   });
 
   // POST /:sessionId/submit

@@ -39,6 +39,14 @@ export async function authorizeSessionAccess(
   }
 
   if (assignment.candidateId === userId) {
+    if (level === "write" && (session.status === "submitted" || session.status === "expired")) {
+      return {
+        ok: false,
+        status: 403,
+        code: "SESSION_LOCKED",
+        message: `Session is ${session.status} and cannot be modified`,
+      };
+    }
     return { ok: true, session, assignment, isOwner: true };
   }
 

@@ -39,6 +39,18 @@ export function errorHandler(error: FastifyError, request: FastifyRequest, reply
     });
   }
 
+  // Application-level rate limiting (@fastify/rate-limit). Distinct from a
+  // provider 429 (PROVIDER_RATE_LIMITED) so the client can tell them apart.
+  if (error.statusCode === 429) {
+    return reply.status(429).send({
+      success: false,
+      error: {
+        code: "RATE_LIMITED",
+        message: "Too many requests. Please slow down and try again shortly.",
+      },
+    });
+  }
+
   // Custom application errors
   if (error.statusCode) {
     return reply.status(error.statusCode).send({

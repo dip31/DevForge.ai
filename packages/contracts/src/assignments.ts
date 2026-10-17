@@ -40,6 +40,27 @@ export const candidateAssignmentSchema = z.object({
   withdrawnAt: isoDateSchema.nullable().optional(),
   withdrawnReason: z.string().max(2000).nullable().optional(),
   metadata: z.record(z.unknown()).default({}),
+  taskDetails: z
+    .object({
+      title: z.string().optional(),
+      description: z.string().optional(),
+      role: z.string().optional(),
+      skills: z.string().optional(),
+      durationMinutes: z.number().int().positive().optional(),
+      difficulty: z.string().optional(),
+      instructions: z.string().nullable().optional(),
+      aiPolicy: z.string().nullable().optional(),
+      starterFiles: z
+        .array(
+          z.object({
+            path: z.string(),
+            language: z.string(),
+            isReadOnly: z.boolean().default(false),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema,
 });
@@ -78,6 +99,18 @@ export const assessmentSessionSchema = z.object({
   totalPausedSeconds: z.number().int().nonnegative().default(0),
   currentFile: z.string().max(500).nullable().optional(),
   metadata: z.record(z.unknown()).default({}),
+  taskDetails: z
+    .object({
+      title: z.string().optional(),
+      description: z.string().optional(),
+      role: z.string().optional(),
+      skills: z.string().optional(),
+      durationMinutes: z.number().int().positive().optional(),
+      difficulty: z.string().optional(),
+      instructions: z.string().nullable().optional(),
+      aiPolicy: z.string().nullable().optional(),
+    })
+    .optional(),
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema,
 });

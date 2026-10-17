@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "npm run dev --workspace=apps/web",
     "dev:api": "npm run dev --workspace=apps/api",
+    "dev:all": "concurrently -n web,api -c cyan,magenta \"npm.cmd run dev\" \"npm.cmd run dev:api\"",
     "build": "npm run build --workspace=apps/web",
     "build:api": "npm run build --workspace=apps/api",
     "test": "npm run test --workspaces --if-present",

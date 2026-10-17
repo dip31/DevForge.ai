@@ -47,6 +47,14 @@ export const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
 
+  // ── Groq (AI Coach) — server-only ─────────────────────────────────────────
+  // When GROQ_API_KEY is set the AI Coach calls Groq's OpenAI-compatible API.
+  // Never expose the key to the browser; it is only used by the API server.
+  GROQ_API_KEY: z.string().min(1).optional(),
+  GROQ_MODEL: z.string().min(1).default("openai/gpt-oss-20b"),
+  GROQ_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  GROQ_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().max(32768).default(1024),
+
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.coerce.number().int().positive().optional(),
   SMTP_USER: z.string().optional(),
@@ -108,6 +116,9 @@ export function testConfig(): EnvConfig {
     CORS_CREDENTIALS: true,
     RATE_LIMIT_MAX: 1000,
     RATE_LIMIT_WINDOW_MS: 60000,
+    GROQ_MODEL: "openai/gpt-oss-20b",
+    GROQ_TIMEOUT_MS: 30000,
+    GROQ_MAX_OUTPUT_TOKENS: 1024,
     LOG_LEVEL: "error",
     LOG_PRETTY: false,
   };

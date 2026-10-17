@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { assessmentSessions } from "./assignments";
 import { users, organizations } from "./auth";
 
-export const aiProviderEnum = pgEnum("ai_provider", ["openai", "anthropic", "local"]);
+export const aiProviderEnum = pgEnum("ai_provider", ["openai", "anthropic", "groq", "local"]);
 
 export const aiInteractionTypeEnum = pgEnum("ai_interaction_type", [
   "coach_prompt",

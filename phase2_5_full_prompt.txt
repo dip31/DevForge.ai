@@ -1,0 +1,214 @@
+<USER_REQUEST>
+# DevForge.ai — Phase 2.5: Assessment Workspace Entry and Task Context Fix
+
+## Objective
+
+Fix the candidate's assigned-assessment entry flow so that the correct assessment task loads, the file explorer contains only the appropriate starter files, task instructions are accessible inside the workspace, and the existing AI Coach does not mislead users about its current capabilities.
+
+This is an implementation task in the existing repository, not a redesign or a new application.
+
+## 1. Inspect the Existing Implementation First
+
+Before modifying anything, inspect the current codebase and identify:
+
+- Candidate dashboard and assigned-assessment components.
+- Assessment start and session restoration flow.
+- IDE/workspace component and file explorer.
+- Starter-file initialization logic.
+- Any hardcoded demo files, default files, mock tasks, or localStorage workspace state.
+- Assessment/task description contracts and API routes.
+- Existing session file persistence, if any.
+- AI Coach frontend and backend implementation.
+- Existing tests and shared types.
+
+Trace the complete flow from selecting an assigned assessment to rendering the workspace.
+
+Do not assume that specific routes, functions, or fields exist. Reuse the actual implementation and contracts found in the repository.
+
+Before editing, provide a short summary of the root causes you identify. Then implement the fixes.
+
+## 2. Fix the File Explorer and Starter Files
+
+### Required behavior
+
+When a candidate starts an assigned assessment, the file explorer must contain only files intended for that assessment.
+
+- Remove unrelated demo files, hardcoded example projects, and files inherited from another assessment.
+- Do not inject default starter files into an assessment if they are not configured for that assessment.
+- Load the correct starter files associated with the selected assessment or its task configuration.
+- If the assessment intentionally has no starter files, show an appropriate empty workspace instead of silently inserting demo content.
+- Do not allow one candidate's workspace or another assessment's files to leak into the current session.
+- Ensure that switching between assessments cannot retain stale files from the previous assessment.
+- Do not delete legitimate assessment starter files simply because they are not part of a generic default template.
+
+### Initialization rules
+
+1. Resolve the authenticated candidate and the assigned assessment.
+2. Resolve the correct assessment session using the existing session API and lifecycle.
+3. Load persisted session files if they exist.
+4. If no persisted workspace exists, initialize from that assessment's configured starter files.
+5. Do not reinitialize a workspace that already contains candidate edits.
+6. If the session has been submitted or has expired, restore it in read-only mode rather than creating a new editable workspace.
+
+If the existing backend does not yet distinguish starter files from candidate-edited files, inspect the current schema and implement the smallest compatible solution. Do not introduce a parallel workspace system.
+
+**Important:** Do not use localStorage as the authority for session ownership or as a replacement for backend persistence. If backend workspace persistence has not been implemented yet, make the initialization logic compatible with Phase 3 and clearly document that limitation.
+
+## 3. Add an In-Workspace Task Details Panel
+
+Candidates must be able to review their assigned task after entering the assessment, without navigating away from the IDE.
+
+Add a professional, compact **Task Details** panel or drawer that matches the existing DevForge.ai design system.
+
+It should display the information actually available from the selected assessment/task:
+
+- Task title.
+- Problem statement and objective.
+- Requirements and expected behavior.
+- Constraints and relevant implementation instructions.
+- Expected deliverables or acceptance criteria, if configured.
+- Assessment time limit or remaining time, if available from the authoritative session state.
+- Any recruiter-defined rules about AI assistance, if supported by the existing schema.
+
+### UX requirements
+
+- Provide a clearly visible `Task Details` button or panel tab.
+- Allow the candidate to open and close the panel without losing code or session state.
+- Keep the task accessible while coding.
+- Use existing UI components and styling where possible.
+- Do not invent task requirements, expected outputs, or assessment rules.
+- If a field is unavailable, omit it or display a neutral unavailable state rather than fabricate content.
+- Make the panel usable at the existing desktop and supported responsive breakpoints.
+- Ensure the panel does not unnecessarily obscure the editor or make the workspace unusable.
+
+Use the existing task data returned by the backend. If the current assessment API does not return the required task details, extend its shared Zod contract and API response minimally, with appropriate authorization and tests.
+
+## 4. Make Assessment Context Consistent
+
+The workspace must remain associated with the correct assigned assessment and session throughout the candidate's attempt.
+
+Verify that:
+
+- The task displayed in Task Details matches the assessment the candidate actually started.
+- The session ID belongs to the authenticated candidate and the correct assignment.
+- Refreshing the page restores the same assessment and session.
+- Starting another assessment does not accidentally reuse the previous assessment's task or workspace.
+- The candidate cannot access another candidate's session by changing a URL or session ID.
+- Requests from stale or unauthorized sessions are rejected by the backend.
+- Submitted and expired sessions cannot be made editable by refreshing or changing frontend state.
+
+Use server-side authorization and existing session status rules as the source of truth. Do not rely exclusively on frontend checks.
+
+## 5. Make the AI Coach's Current Limitations Clear
+
+The real LLM provider has not yet been integrated. Do not implement the LLM integration in this task.
+
+Inspect the existing AI Coach and determine whether its responses are deterministic, hardcoded, rule-based, or backed by an actual model.
+
+For this phase:
+
+- Do not claim that a real AI model is responding when it is not.
+- Do not present mock or deterministic answers as genuine AI-generated analysis.
+- If the existing coach is only a placeholder, show a clear, professional status message indicating that full AI assistance is not yet available.
+- If existing limited functionality is retained, accurately communicate its scope.
+- Handle unsupported questions and failed requests with useful, honest feedback.
+- Preserve the existing UI where practical, without introducing fake model responses or fabricated code analysis.
+
+Keep the implementation ready for a later server-side LLM integration, but do not add a provider SDK, API key, or external AI dependency in this phase.
+
+## 6. Loading, Error, and Empty States
+
+Handle the following cases explicitly:
+
+- Assignment details are loading.
+- Assessment or task details cannot be retrieved.
+- Session creation or restoration fails.
+- The assessment has no configured starter files.
+- A saved workspace is empty.
+- The session has expired.
+- The session has already been submitted.
+- The candidate loses connectivity or a request fails.
+- The candidate attempts to open an assessment they are not authorized to access.
+
+Do not silently fall back to unrelated hardcoded demo content when an API call fails.
+
+Show actionable error messages and provide a retry option where retrying is safe. Do not create duplicate sessions or overwrite candidate edits during retries.
+
+## 7. Tests and Verification
+
+Add or update tests for the following scenarios:
+
+1. Starting an assessment with configured starter files shows only those files.
+2. An assessment without starter files does not receive unrelated default files.
+3. Files from one assessment do not appear in another assessment.
+4. Existing candidate edits are not overwritten during session restoration.
+5. Task Details displays the correct assessment's actual task information.
+6. Task Details remains accessible while coding.
+7. Refreshing restores the same assessment and session.
+8. Unauthorized candidates cannot retrieve another candidate's task/session data.
+9. Submitted and expired sessions remain read-only.
+10. API failure does not silently initialize a fake workspace.
+11. AI Coach placeholder behavior does not imply that a real LLM is connected.
+12. Existing assessment, recruiter, authentication, and routing tests continue to pass.
+
+Run the relevant tests, TypeScript checks, formatter checks, and production build using the repository's existing commands.
+
+Distinguish mocked tests from tests verified against a live Supabase/database environment. Do not claim live integration verification unless it was actually performed.
+
+## 8. Scope Boundaries
+
+Do not implement these features in this task:
+
+- Real LLM/provider integration.
+- Browser tab-switch monitoring or other proctoring.
+- Real code execution or sandboxing.
+- New evaluation/scoring logic.
+- Billing or subscriptions.
+- A full IDE redesign.
+- Unrelated database schema refactoring.
+- Destructive migrations, database resets, or changes to production data.
+
+Those should remain separate, independently testable phases.
+
+## 9. Implementation Constraints
+
+- Preserve the existing React + TypeScript, Fastify, Supabase, Drizzle, and shared Zod architecture.
+- Reuse existing API clients, authentication middleware, session services, and contracts.
+- Keep organization and candidate authorization enforced on the backend.
+- Avoid duplicating API logic in React components.
+- Avoid broad refactors unrelated to this task.
+- Do not hardcode assessment IDs, candidate IDs, task content, or demo file lists.
+- Do not remove working features to make the tests pass.
+- Do not apply destructive migrations or reset the database.
+- If an architectural dependency is missing, implement the smallest safe change and document the remaining limitation.
+
+## 10. Final Report
+
+After implementation, report:
+
+1. Root causes discovered.
+2. Files and components changed.
+3. How starter-file initialization now works.
+4. How Task Details obtains and displays the correct task.
+5. How session isolation and read-only states are enforced.
+6. What changed in the AI Coach and what remains unimplemented.
+7. Tests, type checks, formatting checks, and build results.
+8. Any remaining blockers or dependencies for Phase 3.
+9. Whether each verification was mocked, locally integrated, or tested against a live backend.
+
+**Definition of done:** A candidate can start an assigned assessment, see only its legitimate starter files, read the correct task inside the IDE, refresh without losing or mixing assessment context, and receive honest feedback about the current AI Coach capabilities — without breaking existing authentication, recruiter workflows, or session authorization.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-16T16:22:23+05:30.
+
+The user's current state is as follows:
+Active Document: d:\codeApex\DevForge.ai\.env (LANGUAGE_UNSPECIFIED)
+Cursor is on line: 89
+Other open documents:
+- d:\codeApex\DevForge.ai\.env (LANGUAGE_UNSPECIFIED)
+- d:\codeApex\DevForge.ai\apps\web\.env (LANGUAGE_UNSPECIFIED)
+- d:\codeApex\DevForge.ai\.env.example (LANGUAGE_UNSPECIFIED)
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from None to Gemini 3.8 Flash (Low). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>

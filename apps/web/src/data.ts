@@ -39,6 +39,23 @@ export type CandidateAssignment = {
   difficulty: string;
   skills: string[];
   implemented: boolean;
+  starterFiles?: WorkspaceFile[];
+  instructions?: string | null;
+  aiPolicy?: string | null;
+  taskDetails?: {
+    title?: string;
+    description?: string;
+    company?: string;
+    role?: string;
+    skills?: string;
+    durationMinutes?: number;
+    difficulty?: string;
+    instructions?: string | null;
+    aiPolicy?: string | null;
+    requirements?: string[];
+    allowedImports?: string[];
+    starterFiles?: Array<{ path: string; language: string; isReadOnly?: boolean }>;
+  };
 };
 
 export type WorkspaceFile = {
@@ -85,6 +102,27 @@ export type CoachMessage = {
     content: string;
     label: string;
   };
+  provider?: string;
+  model?: string;
+  isError?: boolean;
+  retryAction?: string;
+  retryText?: string;
+  // File operations proposed or applied by the AI coding agent.
+  operations?: AgentOperationView[];
+  // False when the agent ran against a local demo workspace (not server-persisted).
+  persisted?: boolean;
+  // Why the agent loop ended (only set on agent messages).
+  stopReason?: "completed" | "max_iterations" | "no_progress" | "provider_error";
+};
+
+export type AgentOperationView = {
+  id: string;
+  kind: "create_file" | "edit_file" | "delete_file" | "create_directory";
+  path: string;
+  content?: string | null;
+  status: "pending" | "applied" | "rejected" | "failed";
+  requiresApproval?: boolean;
+  error?: string | null;
 };
 
 export type CodeRevision = {
@@ -134,6 +172,22 @@ export type AssessmentSession = {
   testRuns: TestRunRecord[];
   activity: ActivityEvent[];
   submittedAt?: string;
+  isReadOnly?: boolean;
+  expiresAt?: string;
+  taskDetails?: {
+    title?: string;
+    description?: string;
+    company?: string;
+    role?: string;
+    skills?: string;
+    durationMinutes?: number;
+    difficulty?: string;
+    instructions?: string | null;
+    aiPolicy?: string | null;
+    requirements?: string[];
+    allowedImports?: string[];
+    starterFiles?: Array<{ path: string; language: string; isReadOnly?: boolean }>;
+  };
 };
 
 export const demoAccounts = {
@@ -233,54 +287,65 @@ export const candidateAssessments = [
   },
 ];
 
-export const candidateAssignments: CandidateAssignment[] = [
+export const vertexStarterFiles: WorkspaceFile[] = [
   {
-    id: "novatech-task-manager",
-    companyId: "novatech-solutions",
-    company: "NovaTech Solutions",
-    assessment: "Frontend Developer Coding Challenge",
-    task: "Build a Team Task Manager",
-    description:
-      "Build a responsive task workflow with priorities, completion states, filters, and clear empty states.",
-    duration: 45,
-    deadline: "18 October 2026",
-    difficulty: "Intermediate",
-    skills: [
-      "React",
-      "JavaScript",
-      "Component design",
-      "State management",
-      "Testing",
-      "Debugging",
-      "Responsible AI collaboration",
-    ],
-    implemented: true,
+    path: "src/dataProcessor.js",
+    language: "javascript",
+    content: `export function transformRecord(record) {
+  if (!record || typeof record !== "object") return null;
+  return {
+    id: record.id ?? String(Date.now()),
+    name: (record.name || "").trim(),
+    value: typeof record.value === "number" ? record.value : 0,
+    active: Boolean(record.active),
+  };
+}
+
+export function aggregateByField(records, field) {
+  const result = {};
+  for (const record of records) {
+    const key = record[field] ?? "unknown";
+    result[key] = (result[key] || 0) + 1;
+  }
+  return result;
+}`,
   },
   {
-    id: "vertex-data-functions",
-    companyId: "vertex-digital",
-    company: "Vertex Digital",
-    assessment: "JavaScript Problem-Solving Assessment",
-    task: "Implement and test data-processing functions",
-    description:
-      "Implement reliable transformations for structured data and account for realistic edge cases.",
-    duration: 30,
-    deadline: "21 October 2026",
-    difficulty: "Intermediate",
-    skills: ["JavaScript", "Algorithms", "Edge cases", "Debugging"],
-    implemented: false,
+    path: "tests/dataProcessor.test.js",
+    language: "javascript",
+    readOnly: true,
+    content: `import { transformRecord, aggregateByField } from "../src/dataProcessor";
+
+describe("dataProcessor", () => {
+  it("transforms valid record with sanitized fields", () => {});
+  it("handles null and undefined input gracefully", () => {});
+  it("aggregates counts by specified field", () => {});
+});`,
   },
   {
-    id: "novatech-api-integration",
-    companyId: "novatech-solutions",
-    company: "NovaTech Solutions",
-    assessment: "API Integration Challenge",
-    task: "Build a structured-data interface",
-    description: "Build an interface that consumes, handles, and displays structured API data.",
-    duration: 60,
-    difficulty: "Intermediate",
-    skills: ["API integration", "Error handling", "State management", "Testing"],
-    implemented: false,
+    path: "package.json",
+    language: "json",
+    readOnly: true,
+    content: `{
+  "name": "vertex-data-functions",
+  "private": true,
+  "scripts": {
+    "test": "devforge-demo-test"
+  }
+}`,
+  },
+  {
+    path: "README.md",
+    language: "markdown",
+    readOnly: true,
+    content: `# JavaScript Problem-Solving Assessment
+
+Implement and test reliable data-processing transformations for structured data.
+
+## Objectives
+1. Implement \`transformRecord\` to normalize and sanitize fields.
+2. Implement \`aggregateByField\` to group counts deterministically.
+3. Handle edge cases with null, undefined, or missing values.`,
   },
 ];
 
@@ -423,6 +488,71 @@ Build a responsive task manager that supports:
 
 The Phase 2 runner uses a deterministic source analyzer and preview adapter.
 Arbitrary candidate JavaScript is not executed on the host.`,
+  },
+];
+
+export const candidateAssignments: CandidateAssignment[] = [
+  {
+    id: "novatech-task-manager",
+    companyId: "novatech-solutions",
+    company: "NovaTech Solutions",
+    assessment: "Frontend Developer Coding Challenge",
+    task: "Build a Team Task Manager",
+    description:
+      "Build a responsive task workflow with priorities, completion states, filters, and clear empty states.",
+    duration: 45,
+    deadline: "18 October 2026",
+    difficulty: "Intermediate",
+    skills: [
+      "React",
+      "JavaScript",
+      "Component design",
+      "State management",
+      "Testing",
+      "Debugging",
+      "Responsible AI collaboration",
+    ],
+    implemented: true,
+    starterFiles: starterWorkspaceFiles,
+    instructions:
+      "1. Build a responsive task manager form with priority selection.\n2. Support active, completed, and all task status filters.\n3. Render an empty-state message when no tasks match the filter.\n4. Preserve task state during candidate interactions.",
+    aiPolicy:
+      "Rule-based assistance is available for syntax and test diagnostics. Direct full-solution generation is not supported.",
+  },
+  {
+    id: "vertex-data-functions",
+    companyId: "vertex-digital",
+    company: "Vertex Digital",
+    assessment: "JavaScript Problem-Solving Assessment",
+    task: "Implement and test data-processing functions",
+    description:
+      "Implement reliable transformations for structured data and account for realistic edge cases.",
+    duration: 30,
+    deadline: "21 October 2026",
+    difficulty: "Intermediate",
+    skills: ["JavaScript", "Algorithms", "Edge cases", "Debugging"],
+    implemented: true,
+    starterFiles: vertexStarterFiles,
+    instructions:
+      "1. Implement transformRecord to normalize record properties and sanitize names.\n2. Handle null, undefined, or malformed input without throwing exceptions.\n3. Implement aggregateByField to compute item frequencies by key.",
+    aiPolicy:
+      "AI assistance is limited to syntax reference and test diagnosis. No automated full code synthesis.",
+  },
+  {
+    id: "novatech-api-integration",
+    companyId: "novatech-solutions",
+    company: "NovaTech Solutions",
+    assessment: "API Integration Challenge",
+    task: "Build a structured-data interface",
+    description: "Build an interface that consumes, handles, and displays structured API data.",
+    duration: 60,
+    difficulty: "Intermediate",
+    skills: ["API integration", "Error handling", "State management", "Testing"],
+    implemented: true,
+    starterFiles: [], // Intentionally empty starter workspace
+    instructions:
+      "1. Build an interface from scratch that consumes structured JSON data.\n2. Implement resilient error handling and loading indicators.\n3. Display empty-state feedback when no data is returned.",
+    aiPolicy: "Standard developer tooling and rule-based diagnostics allowed.",
   },
 ];
 

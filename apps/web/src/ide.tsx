@@ -2,14 +2,14 @@ import { FormEvent, KeyboardEvent, ReactNode, useEffect, useRef, useState } from
 import {
   ActivityEvent,
   AssessmentSession,
+  candidateAssignments,
   CodeRevision,
-  starterWorkspaceFiles,
   WorkspaceFile,
 } from "./data";
 import { analyzeTests, CoachPanel, LivePreview, Timer, UpdateSession, WIcon } from "./assessment";
 
 type PersistSession = (session: AssessmentSession) => boolean;
-type ActivityId = "explorer" | "search" | "source" | "run" | "extensions";
+type ActivityId = "explorer" | "task" | "search" | "source" | "run" | "extensions";
 type BottomTab = "terminal" | "output" | "problems" | "tests" | "activity";
 
 type TerminalLine = {
@@ -56,7 +56,12 @@ function terminalOne(): TerminalSession {
   };
 }
 
-function defaultUiState(): WorkspaceUiState {
+function defaultUiState(session?: AssessmentSession): WorkspaceUiState {
+  const initialFile = session?.files.length
+    ? session.files.some((f) => f.path === session.currentFile)
+      ? session.currentFile
+      : session.files[0].path
+    : "";
   return {
     sidebarOpen: false,
     activeActivity: null,
@@ -64,7 +69,7 @@ function defaultUiState(): WorkspaceUiState {
     agentOpen: false,
     bottomOpen: false,
     bottomTab: "terminal",
-    openTabs: ["src/App.jsx"],
+    openTabs: initialFile ? [initialFile] : [],
     expandedFolders: ["root", "src"],
     terminals: [terminalOne()],
     activeTerminalId: "terminal-1",
@@ -72,34 +77,31 @@ function defaultUiState(): WorkspaceUiState {
 }
 
 function normalizeSessionFiles(session: AssessmentSession) {
-  const missing = starterWorkspaceFiles.filter(
-    (starter) => !session.files.some((file) => file.path === starter.path),
-  );
-  if (!missing.length) return session;
-  const missingSaved = missing.filter(
-    (starter) => !session.savedFiles.some((file) => file.path === starter.path),
-  );
-  return {
-    ...session,
-    files: [...session.files, ...structuredClone(missing)],
-    savedFiles: [...session.savedFiles, ...structuredClone(missingSaved)],
-  };
+  // Preserve legitimate starter files for this specific assessment without cross-bleeding.
+  return session;
 }
 
-function loadUiState(sessionId: string): WorkspaceUiState {
+function loadUiState(session: AssessmentSession): WorkspaceUiState {
+  const defaults = defaultUiState(session);
   try {
-    const parsed = JSON.parse(localStorage.getItem(`devforge-workspace-ui:${sessionId}`) ?? "null");
+    const parsed = JSON.parse(localStorage.getItem(`devforge-workspace-ui:${session.sessionId}`) ?? "null");
     if (
       parsed &&
       Array.isArray(parsed.openTabs) &&
       Array.isArray(parsed.terminals) &&
       typeof parsed.bottomOpen === "boolean"
-    )
-      return { ...defaultUiState(), ...parsed };
+    ) {
+      const validTabs = parsed.openTabs.filter((tab: string) => session.files.some((f) => f.path === tab));
+      return {
+        ...defaults,
+        ...parsed,
+        openTabs: validTabs.length ? validTabs : defaults.openTabs,
+      };
+    }
   } catch {
-    // Invalid workspace UI state falls back to the safe closed layout.
+    // Invalid workspace UI state falls back to safe defaults.
   }
-  return defaultUiState();
+  return defaults;
 }
 
 function fileLabel(path: string) {
@@ -155,14 +157,17 @@ function ActivityBar({
   toggleActivity,
   togglePreview,
   resetLayout,
+  candidateName,
 }: {
   ui: WorkspaceUiState;
   toggleActivity: (activity: ActivityId) => void;
   togglePreview: () => void;
   resetLayout: () => void;
+  candidateName?: string;
 }) {
   const items: Array<[ActivityId, string, ReactNode]> = [
     ["explorer", "Explorer", <WIcon name="folder" />],
+    ["task", "Task Details", <WIcon name="info" />],
     ["search", "Search", <WIcon name="search" />],
     ["source", "Source Control", <WIcon name="branch" />],
     ["run", "Run and Tests", <WIcon name="play" />],
@@ -192,8 +197,8 @@ function ActivityBar({
       <div>
         <div
           className="activity-account"
-          title="Assessment session: Alex Morgan"
-          aria-label="Assessment session: Alex Morgan"
+          title={`Assessment session: ${candidateName || "Candidate"}`}
+          aria-label={`Assessment session: ${candidateName || "Candidate"}`}
         >
           <WIcon name="account" />
         </div>
@@ -216,13 +221,14 @@ function FileTree({
   setUi: React.Dispatch<React.SetStateAction<WorkspaceUiState>>;
   openFile: (path: string) => void;
 }) {
-  const toggle = (folder: string) =>
+  const toggle = (folderPath: string) =>
     setUi((current) => ({
       ...current,
-      expandedFolders: current.expandedFolders.includes(folder)
-        ? current.expandedFolders.filter((item) => item !== folder)
-        : [...current.expandedFolders, folder],
+      expandedFolders: current.expandedFolders.includes(folderPath)
+        ? current.expandedFolders.filter((item) => item !== folderPath)
+        : [...current.expandedFolders, folderPath],
     }));
+
   const folder = (name: string, path: string, children: WorkspaceFile[]) => (
     <div className="tree-group" key={path}>
       <button
@@ -255,7 +261,16 @@ function FileTree({
       )}
     </div>
   );
+
+  const topFolders = Array.from(
+    new Set(
+      session.files
+        .filter((file) => file.path.includes("/"))
+        .map((file) => file.path.split("/")[0]),
+    ),
+  ).sort();
   const rootFiles = session.files.filter((file) => !file.path.includes("/"));
+
   return (
     <div className="explorer-view">
       <div className="sidebar-toolbar">
@@ -265,7 +280,7 @@ function FileTree({
             onClick={() =>
               setUi((current) => ({
                 ...current,
-                expandedFolders: ["root", "src", "tests", "public"],
+                expandedFolders: ["root", ...topFolders],
               }))
             }
             title="Refresh tree"
@@ -291,36 +306,37 @@ function FileTree({
       </button>
       {ui.expandedFolders.includes("root") && (
         <div className="tree-root-content">
-          {folder(
-            "src",
-            "src",
-            session.files.filter((file) => file.path.startsWith("src/")),
+          {session.files.length === 0 ? (
+            <div className="sidebar-empty">
+              <WIcon name="info" />
+              <p>No starter files configured for this assessment.</p>
+            </div>
+          ) : (
+            <>
+              {topFolders.map((dirName) =>
+                folder(
+                  dirName,
+                  dirName,
+                  session.files.filter((file) => file.path.startsWith(`${dirName}/`)),
+                ),
+              )}
+              {rootFiles.map((file) => (
+                <button
+                  className={`tree-file root-file ${session.currentFile === file.path ? "active" : ""}`}
+                  onClick={() => openFile(file.path)}
+                  title={file.path}
+                  key={file.path}
+                >
+                  <span className={`file-kind kind-${fileKind(file.path).toLowerCase()}`}>
+                    {fileKind(file.path)}
+                  </span>
+                  <span>{file.path}</span>
+                  {isModified(file, session) && <i title="Modified"></i>}
+                  {file.readOnly && <small title="Read only">RO</small>}
+                </button>
+              ))}
+            </>
           )}
-          {folder(
-            "tests",
-            "tests",
-            session.files.filter((file) => file.path.startsWith("tests/")),
-          )}
-          {folder(
-            "public",
-            "public",
-            session.files.filter((file) => file.path.startsWith("public/")),
-          )}
-          {rootFiles.map((file) => (
-            <button
-              className={`tree-file root-file ${session.currentFile === file.path ? "active" : ""}`}
-              onClick={() => openFile(file.path)}
-              title={file.path}
-              key={file.path}
-            >
-              <span className={`file-kind kind-${fileKind(file.path).toLowerCase()}`}>
-                {fileKind(file.path)}
-              </span>
-              <span>{file.path}</span>
-              {isModified(file, session) && <i title="Modified"></i>}
-              {file.readOnly && <small title="Read only">RO</small>}
-            </button>
-          ))}
         </div>
       )}
       <div className="virtual-project-note">
@@ -584,6 +600,121 @@ function ExtensionsView({
   );
 }
 
+function TaskDetailsView({ session }: { session: AssessmentSession }) {
+  const fallbackAssignment = candidateAssignments.find((a) => a.id === session.assignmentId);
+  const details = session.taskDetails ?? (fallbackAssignment ? {
+    title: fallbackAssignment.task,
+    role: fallbackAssignment.assessment,
+    company: fallbackAssignment.company,
+    durationMinutes: fallbackAssignment.duration,
+    difficulty: fallbackAssignment.difficulty,
+    skills: fallbackAssignment.skills,
+    description: fallbackAssignment.taskDetails?.description ?? fallbackAssignment.description,
+    instructions: fallbackAssignment.instructions,
+    aiPolicy: fallbackAssignment.aiPolicy,
+    requirements: fallbackAssignment.taskDetails?.requirements ?? [],
+    allowedImports: fallbackAssignment.taskDetails?.allowedImports ?? [],
+  } : null);
+
+  if (!details) {
+    return (
+      <div className="sidebar-empty">
+        <WIcon name="info" />
+        <p>No task details available for this assessment.</p>
+      </div>
+    );
+  }
+
+  const skillsList: string[] = Array.isArray(details.skills)
+    ? details.skills
+    : typeof details.skills === "string"
+      ? (details.skills as string).split(",").map((s) => s.trim())
+      : [];
+
+  return (
+    <div className="task-details-view">
+      <div className="task-details-header">
+        <div className="task-details-meta">
+          <span className="task-company">{details.company || "DevForge"}</span>
+          {details.role && <span className="task-role">• {details.role}</span>}
+        </div>
+        <h3 className="task-details-title">{details.title}</h3>
+        <div className="task-chips">
+          <span className="task-chip duration">
+            <WIcon name="timer" size={13} />
+            {details.durationMinutes} min
+          </span>
+          {details.difficulty && (
+            <span className={`task-chip difficulty ${details.difficulty}`}>
+              {details.difficulty.toUpperCase()}
+            </span>
+          )}
+        </div>
+        {skillsList.length > 0 && (
+          <div className="task-skills">
+            {skillsList.map((skill) => (
+              <span key={skill} className="skill-tag">
+                {skill}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="task-details-body">
+        <section className="task-section">
+          <h4>Overview</h4>
+          <p>{details.description}</p>
+        </section>
+
+        {details.instructions && (
+          <section className="task-section">
+            <h4>Instructions</h4>
+            <div className="task-instructions-content">
+              {details.instructions.split("\n\n").map((para, i) => (
+                <p key={i}>{para}</p>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {details.requirements && details.requirements.length > 0 && (
+          <section className="task-section">
+            <h4>Requirements &amp; Acceptance Criteria</h4>
+            <ul className="task-requirements-list">
+              {details.requirements.map((req, i) => (
+                <li key={i}>{req}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {details.allowedImports && details.allowedImports.length > 0 && (
+          <section className="task-section">
+            <h4>Allowed Dependencies</h4>
+            <div className="task-imports-list">
+              {details.allowedImports.map((imp) => (
+                <code key={imp}>{imp}</code>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section className="task-section ai-policy-section">
+          <h4>
+            <WIcon name="ai" size={13} />
+            AI Policy
+          </h4>
+          <p>
+            {details.aiPolicy ??
+              "AI assistance is permitted for syntax guidance and debugging. You remain responsible for the correctness, design, and provenance of all submitted work."}
+          </p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function WorkspaceSidebar({
   session,
   ui,
@@ -613,6 +744,7 @@ function WorkspaceSidebar({
 }) {
   const titles: Record<ActivityId, string> = {
     explorer: "Explorer",
+    task: "Task Details",
     search: "Search",
     source: "Source Control",
     run: "Run and Tests",
@@ -631,6 +763,7 @@ function WorkspaceSidebar({
         {activity === "explorer" && (
           <FileTree session={session} ui={ui} setUi={setUi} openFile={openFile} />
         )}
+        {activity === "task" && <TaskDetailsView session={session} />}
         {activity === "search" && <SearchView session={session} openFile={openFile} />}
         {activity === "source" && (
           <SourceControlView session={session} save={save} restore={restore} />
@@ -669,8 +802,9 @@ function IdeEditor({
     setUi((current) => ({ ...current, openTabs: remaining }));
     if (path === session.currentFile && remaining.length) openFile(remaining.at(-1)!);
   };
+  const isReadOnly = !!session.submittedAt || !!session.isReadOnly;
   const change = (content: string) => {
-    if (!active || active.readOnly || session.submittedAt) return;
+    if (!active || active.readOnly || isReadOnly) return;
     const wasModified = isModified(active, session);
     update({
       ...session,
@@ -692,7 +826,7 @@ function IdeEditor({
     });
   };
   const handleKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Tab" || !active || active.readOnly || session.submittedAt) return;
+    if (event.key !== "Tab" || !active || active.readOnly || isReadOnly) return;
     event.preventDefault();
     const target = event.currentTarget;
     const start = target.selectionStart;
@@ -717,7 +851,7 @@ function IdeEditor({
                 <span className="file-kind">{fileKind(path)}</span>
                 <span>{fileLabel(path)}</span>
                 {isModified(file, session) && <i title="Unsaved changes"></i>}
-                {file.readOnly && <small>RO</small>}
+                {(file.readOnly || isReadOnly) && <small>RO</small>}
                 <b
                   role="button"
                   tabIndex={0}
@@ -766,7 +900,7 @@ function IdeEditor({
           <div className="editor-toolbar">
             <span>{active.path}</span>
             <div>
-              {active.readOnly && <span className="readonly-label">Read only</span>}
+              {(active.readOnly || isReadOnly) && <span className="readonly-label">Read only</span>}
               <span>{active.language}</span>
             </div>
           </div>
@@ -781,7 +915,7 @@ function IdeEditor({
               value={active.content}
               onChange={(event) => change(event.target.value)}
               onKeyDown={handleKey}
-              readOnly={active.readOnly || !!session.submittedAt}
+              readOnly={active.readOnly || isReadOnly}
               spellCheck={false}
             />
           </div>
@@ -791,10 +925,10 @@ function IdeEditor({
               {active.language}
             </span>
             <span>{active.content.split("\n").length} lines</span>
-            <span>{active.readOnly ? "Protected assessment file" : "UTF-8"}</span>
+            <span>{active.readOnly || isReadOnly ? "Protected assessment file" : "UTF-8"}</span>
             <button
               onClick={resetFiles}
-              disabled={!!session.submittedAt}
+              disabled={isReadOnly}
               title="Reset starter files"
             >
               <WIcon name="refresh" />
@@ -805,18 +939,22 @@ function IdeEditor({
       ) : (
         <div className="editor-welcome">
           <span>&lt;/&gt;</span>
-          <h2>DevForge Assessment</h2>
-          <p>Open a supported workspace file from Explorer or Search.</p>
+          <h2>{session.taskDetails?.title || "DevForge Assessment"}</h2>
+          <p>
+            {session.files.length === 0
+              ? "No starter files configured for this assessment. Review task details in the sidebar to begin."
+              : "Open a supported workspace file from Explorer or Search."}
+          </p>
           <button
             onClick={() =>
               setUi((current) => ({
                 ...current,
-                activeActivity: "explorer",
+                activeActivity: session.files.length === 0 ? "task" : "explorer",
                 sidebarOpen: true,
               }))
             }
           >
-            Open Explorer
+            {session.files.length === 0 ? "View Task Details" : "Open Explorer"}
           </button>
         </div>
       )}
@@ -865,7 +1003,16 @@ function BottomPanel({
     if (command === "help")
       return "Supported: help, clear, pwd, ls, npm test, npm run, echo <text>";
     if (command === "pwd") return "/workspace/DevForge-Assessment";
-    if (command === "ls") return "src/  tests/  public/  README.md  package.json";
+    if (command === "ls") {
+      const topItems = Array.from(
+        new Set(
+          session.files.map((file) =>
+            file.path.includes("/") ? `${file.path.split("/")[0]}/` : file.path,
+          ),
+        ),
+      ).sort();
+      return topItems.join("  ") || "src/  package.json";
+    }
     if (command === "npm run")
       return "Available demo scripts:\n  test  devforge-demo-test\n  run   devforge-demo-preview";
     if (command.startsWith("echo ")) return command.slice(5);
@@ -1135,13 +1282,22 @@ export default function IdeWorkspace({
   const initialSession = useRef(normalizeSessionFiles(session));
   const [current, setCurrent] = useState(initialSession.current);
   const currentRef = useRef(initialSession.current);
-  const [ui, setUi] = useState<WorkspaceUiState>(() => loadUiState(session.sessionId));
+  const [ui, setUi] = useState<WorkspaceUiState>(() => loadUiState(session));
   const [running, setRunning] = useState(false);
   const [runKey, setRunKey] = useState(0);
   const [submitOpen, setSubmitOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [timerExpired, setTimerExpired] = useState(false);
+
+  const fallbackAssignment = candidateAssignments.find((a) => a.id === session.assignmentId);
+  const companyName = session.taskDetails?.company || fallbackAssignment?.company || "DevForge";
+  const assessmentTitle =
+    session.taskDetails?.role ||
+    session.taskDetails?.title ||
+    fallbackAssignment?.assessment ||
+    fallbackAssignment?.task ||
+    "Assessment";
 
   useEffect(() => {
     const normalized = normalizeSessionFiles(session);
@@ -1261,7 +1417,7 @@ export default function IdeWorkspace({
             timestamp,
             revisionId,
             resultId,
-            detail: "Ran the supported Team Task Manager preview adapter.",
+            detail: `Ran the supported ${session.taskDetails?.title || fallbackAssignment?.task || "assessment"} preview adapter.`,
             provenance: "candidate_action",
           },
         ],
@@ -1367,12 +1523,13 @@ export default function IdeWorkspace({
       !window.confirm(`Restore ${revision.id}? Current unsaved workspace content will be replaced.`)
     )
       return;
+    const initialStarterFiles = fallbackAssignment?.starterFiles ?? session.files;
     update((active) => ({
       ...active,
       files: [
         ...structuredClone(revision.files),
         ...structuredClone(
-          starterWorkspaceFiles.filter(
+          initialStarterFiles.filter(
             (starter) =>
               starter.readOnly && !revision.files.some((file) => file.path === starter.path),
           ),
@@ -1393,30 +1550,34 @@ export default function IdeWorkspace({
     }));
   };
   const resetLayout = () => {
+    const defaultFile = currentRef.current.files[0]?.path ?? "src/App.jsx";
     setUi((state) => ({
-      ...defaultUiState(),
+      ...defaultUiState(currentRef.current),
       terminals: state.terminals,
       activeTerminalId: state.activeTerminalId,
-      openTabs: state.openTabs.length ? state.openTabs : ["src/App.jsx"],
+      openTabs: state.openTabs.length ? state.openTabs : [defaultFile],
     }));
     record("panel_closed", "Restored the default closed-panel workspace layout.");
   };
   const resetFiles = () => setResetOpen(true);
   const confirmReset = () => {
+    const initialStarterFiles =
+      fallbackAssignment?.starterFiles ?? session.savedFiles ?? session.files;
+    const initialDefaultFile = initialStarterFiles[0]?.path ?? "src/App.jsx";
     update((active) => ({
       ...active,
       files: (() => {
-        const base = structuredClone(active.revisions[0]?.files ?? active.savedFiles);
+        const base = structuredClone(active.revisions[0]?.files ?? initialStarterFiles);
         return [
           ...base,
           ...structuredClone(
-            starterWorkspaceFiles.filter(
+            initialStarterFiles.filter(
               (starter) => starter.readOnly && !base.some((file) => file.path === starter.path),
             ),
           ),
         ];
       })(),
-      currentFile: "src/App.jsx",
+      currentFile: initialDefaultFile,
       unsaved: true,
       activity: [
         ...active.activity,
@@ -1432,7 +1593,7 @@ export default function IdeWorkspace({
     }));
     setUi((state) => ({
       ...state,
-      openTabs: ["src/App.jsx"],
+      openTabs: [initialDefaultFile],
     }));
     setResetOpen(false);
   };
@@ -1469,7 +1630,7 @@ export default function IdeWorkspace({
     }
     currentRef.current = next;
     setCurrent(next);
-    window.history.pushState({}, "", "/candidate/assessments/novatech-task-manager/submission");
+    window.history.pushState({}, "", `/candidate/assessments/${session.assignmentId}/submission`);
     window.dispatchEvent(new PopStateEvent("popstate"));
   };
   const latestTest = current.testRuns.at(-1);
@@ -1489,12 +1650,16 @@ export default function IdeWorkspace({
           </strong>
         </button>
         <div className="workspace-context">
-          <span>NovaTech Solutions</span>
-          <strong>Frontend Developer Coding Challenge</strong>
+          <span>{companyName}</span>
+          <strong>{assessmentTitle}</strong>
         </div>
-        <span className="ide-session-status">
+        <span
+          className={`ide-session-status ${
+            session.submittedAt ? "submitted" : session.isReadOnly ? "readonly" : ""
+          }`}
+        >
           <i></i>
-          In Progress
+          {session.submittedAt ? "Submitted" : session.isReadOnly ? "Read Only" : "In Progress"}
         </span>
         <div className="workspace-header-actions">
           <Timer session={current} onExpire={() => setTimerExpired(true)} />
@@ -1524,7 +1689,7 @@ export default function IdeWorkspace({
           <button
             className="exit-button"
             onClick={() => {
-              window.history.pushState({}, "", "/candidate/assessments/novatech-task-manager");
+              window.history.pushState({}, "", `/candidate/assessments/${session.assignmentId}`);
               window.dispatchEvent(new PopStateEvent("popstate"));
             }}
             title="Exit workspace"

@@ -37,3 +37,9 @@ Thumbs.db
 # Test coverage
 coverage/
 .nyc_output/
+
+# OpenHands isolated Python environment (never commit)
+.openhands-env/
+
+# OpenHands temporary per-run workspaces (never commit)
+.openhands-workspaces/

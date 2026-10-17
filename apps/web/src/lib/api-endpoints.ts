@@ -37,7 +37,13 @@ import type {
   ReviewerDecision,
 } from "@contracts/reports";
 import type { EvidenceRecord, ActivityEvent } from "@contracts/evidence";
-import type { AiInteraction, AiCoachResponse, AiCoachContext } from "@contracts/ai";
+import type {
+  AiInteraction,
+  AiCoachResponse,
+  AiCoachContext,
+  AiCoachHistoryMessage,
+} from "@contracts/ai";
+import type { AgentResponse, AgentOperation, ApplyOperationsResponse } from "@contracts/agent";
 import type { OrganizationWithRole, CreateOrganizationRequest } from "@contracts/auth";
 
 export type AppProfile = {
@@ -164,9 +170,12 @@ export const testConfigApi = {
 
 export const assignmentsApi = {
   list: (params?: PaginationParams & { status?: string; organizationId?: string }) =>
-    api.get<{ success: true; data: PaginatedResponse<CandidateAssignment> }>("/api/v1/assignments", {
-      params,
-    }),
+    api.get<{ success: true; data: PaginatedResponse<CandidateAssignment> }>(
+      "/api/v1/assignments",
+      {
+        params,
+      },
+    ),
 
   getMyAssignments: () =>
     api.get<{ success: true; data: CandidateAssignment[] }>("/api/v1/assignments/candidate/me"),
@@ -192,6 +201,11 @@ export const sessionsApi = {
 
   get: (sessionId: string) =>
     api.get<{ success: true; data: AssessmentSession }>(`/api/v1/auth/sessions/${sessionId}`),
+
+  getByAssignment: (assignmentId: string) =>
+    api.get<{ success: true; data: AssessmentSession }>(
+      `/api/v1/auth/sessions/by-assignment/${assignmentId}`,
+    ),
 
   submit: (sessionId: string) =>
     api.post<{ success: true; data: AssessmentSession }>(
@@ -397,7 +411,12 @@ export const evidenceApi = {
 export const aiCoachApi = {
   prompt: (
     sessionId: string,
-    data: { action: string; prompt?: string; context?: AiCoachContext },
+    data: {
+      action: string;
+      prompt?: string;
+      context?: AiCoachContext;
+      history?: AiCoachHistoryMessage[];
+    },
   ) =>
     api.post<{ success: true; data: AiCoachResponse }>(
       `/api/v1/sessions/${sessionId}/ai-coach`,
@@ -407,6 +426,27 @@ export const aiCoachApi = {
   getHistory: (sessionId: string) =>
     api.get<{ success: true; data: AiInteraction[] }>(
       `/api/v1/sessions/${sessionId}/ai-coach/history`,
+    ),
+};
+
+export const aiAgentApi = {
+  run: (
+    sessionId: string,
+    data: {
+      prompt: string;
+      context?: AiCoachContext;
+      history?: AiCoachHistoryMessage[];
+    },
+  ) =>
+    api.post<{ success: true; data: AgentResponse }>(
+      `/api/v1/sessions/${sessionId}/ai-agent`,
+      data,
+    ),
+
+  apply: (sessionId: string, operations: AgentOperation[]) =>
+    api.post<{ success: true; data: ApplyOperationsResponse }>(
+      `/api/v1/sessions/${sessionId}/ai-agent/apply`,
+      { operations },
     ),
 };
 

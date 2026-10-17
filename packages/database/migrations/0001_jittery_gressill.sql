@@ -1,0 +1,1 @@
+ALTER TYPE "ai_provider" ADD VALUE 'groq';

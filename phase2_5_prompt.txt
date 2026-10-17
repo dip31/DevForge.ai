@@ -1,0 +1,77 @@
+<USER_REQUEST>
+# DevForge.ai — Phase 2.5: Assessment Workspace Entry and Task Context Fix
+
+## Objective
+
+Fix the candidate's assigned-assessment entry flow so that the correct assessment task loads, the file explorer contains only the appropriate starter files, task instructions are accessible inside the workspace, and the existing AI Coach does not mislead users about its current capabilities.
+
+This is an implementation task in the existing repository, not a redesign or a new application.
+
+## 1. Inspect the Existing Implementation First
+
+Before modifying anything, inspect the current codebase and identify:
+
+- Candidate dashboard and assigned-assessment components.
+- Assessment start and session restoration flow.
+- IDE/workspace component and file explorer.
+- Starter-file initialization logic.
+- Any hardcoded demo files, default files, mock tasks, or localStorage workspace state.
+- Assessment/task description contracts and API routes.
+- Existing session file persistence, if any.
+- AI Coach frontend and backend implementation.
+- Existing tests and shared types.
+
+Trace the complete flow from selecting an assigned assessment to rendering the workspace.
+
+Do not assume that specific routes, functions, or fields exist. Reuse the actual implementation and contracts found in the repository.
+
+Before editing, provide a short summary of the root causes you identify. Then implement the fixes.
+
+## 2. Fix the File Explorer and Starter Files
+
+### Required behavior
+
+When a candidate starts an assigned assessment, the file explorer must contain only files intended for that assessment.
+
+- Remove unrelated demo files, hardcoded example projects, and files inherited from another assessment.
+- Do not inject default starter files into an assessment if they are not configured for that assessment.
+- Load the correct starter files associated with the selected assessment or its task configuration.
+- If the assessment intentionally has no starter files, show an appropriate empty workspace instead of s
+<truncated 7856 bytes>
+nents.
+- Avoid broad refactors unrelated to this task.
+- Do not hardcode assessment IDs, candidate IDs, task content, or demo file lists.
+- Do not remove working features to make the tests pass.
+- Do not apply destructive migrations or reset the database.
+- If an architectural dependency is missing, implement the smallest safe change and document the remaining limitation.
+
+## 10. Final Report
+
+After implementation, report:
+
+1. Root causes discovered.
+2. Files and components changed.
+3. How starter-file initialization now works.
+4. How Task Details obtains and displays the correct task.
+5. How session isolation and read-only states are enforced.
+6. What changed in the AI Coach and what remains unimplemented.
+7. Tests, type checks, formatting checks, and build results.
+8. Any remaining blockers or dependencies for Phase 3.
+9. Whether each verification was mocked, locally integrated, or tested against a live backend.
+
+**Definition of done:** A candidate can start an assigned assessment, see only its legitimate starter files, read the correct task inside the IDE, refresh without losing or mixing assessment context, and receive honest feedback about the current AI Coach capabilities — without breaking existing authentication, recruiter workflows, or session authorization.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-16T16:22:23+05:30.
+
+The user's current state is as follows:
+Active Document: d:\codeApex\DevForge.ai\.env (LANGUAGE_UNSPECIFIED)
+Cursor is on line: 89
+Other open documents:
+- d:\codeApex\DevForge.ai\.env (LANGUAGE_UNSPECIFIED)
+- d:\codeApex\DevForge.ai\apps\web\.env (LANGUAGE_UNSPECIFIED)
+- d:\codeApex\DevForge.ai\.env.example (LANGUAGE_UNSPECIFIED)
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from None to Gemini 3.8 Flash (Low). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>

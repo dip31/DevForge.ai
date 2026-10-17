@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { analyzeTests, coachResponse, now, uid } from "./assessment";
+import { analyzeTests, coachResponse, buildCoachContext, now, uid } from "./assessment";
 import { normalizeEvidence, createEvaluation, EvidenceRecord } from "./evidence";
 import { AssessmentSession, WorkspaceFile, TestResult, CandidateAssignment } from "./data";
 
@@ -199,6 +199,53 @@ export default function App() {
       const response = coachResponse("debug", "", sessionWithFailure);
       expect(response.content).toContain("Filtering tasks by status");
       expect(response.suggestion).toBeDefined();
+    });
+
+    it("responds to a greeting with a greeting, not debugging instructions", () => {
+      const response = coachResponse("prompt", "hiii", mockSession);
+      expect(response.content).toMatch(/hi!/i);
+      expect(response.content).not.toMatch(/one acceptance criterion at a time/i);
+    });
+
+    it("does not send a theme request to the debugging fallback", () => {
+      const response = coachResponse("prompt", "make the entire theme dark", mockSession);
+      expect(response.content).toMatch(/can't change the theme/i);
+      expect(response.content).not.toMatch(/one acceptance criterion at a time/i);
+    });
+
+    it("classifies a code explanation request and asks for a file when none is active", () => {
+      const response = coachResponse("prompt", "explain this code", {
+        ...mockSession,
+        currentFile: "src/missing.js",
+      });
+      expect(response.content).toMatch(/which file or function/i);
+    });
+
+    it("gives an honest clarification for unsupported requests", () => {
+      const response = coachResponse("prompt", "write me a haiku about clouds", mockSession);
+      expect(response.content).toMatch(/not sure what you'd like help with/i);
+      expect(response.content).not.toMatch(/one acceptance criterion at a time/i);
+    });
+
+    it("passes real assessment requirements into the coach context", () => {
+      const context = buildCoachContext({
+        ...mockSession,
+        taskDetails: {
+          instructions: "Build the task manager.",
+          requirements: ["Add a task", "Filter tasks by status"],
+        },
+      });
+      expect(context.instructions).toBe("Build the task manager.");
+      expect(context.requirements).toEqual(["Add a task", "Filter tasks by status"]);
+    });
+
+    it("hints from real requirements when no failure is stored", () => {
+      const response = coachResponse("hint", "", {
+        ...mockSession,
+        testRuns: [],
+        taskDetails: { requirements: ["Add a task", "Filter tasks by status"] },
+      });
+      expect(response.content).toContain("Add a task");
     });
   });
 });
