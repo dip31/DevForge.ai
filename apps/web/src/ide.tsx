@@ -7,6 +7,7 @@ import {
   WorkspaceFile,
 } from "./data";
 import { analyzeTests, CoachPanel, LivePreview, Timer, UpdateSession, WIcon } from "./assessment";
+import { sessionsApi } from "./lib/api-endpoints";
 
 type PersistSession = (session: AssessmentSession) => boolean;
 type ActivityId = "explorer" | "task" | "search" | "source" | "run" | "extensions";
@@ -1597,7 +1598,7 @@ export default function IdeWorkspace({
     }));
     setResetOpen(false);
   };
-  const submit = () => {
+  const submit = async () => {
     if (timerExpired) {
       setSubmitError("Time has expired. You can no longer submit this assessment.");
       return;
@@ -1628,6 +1629,16 @@ export default function IdeWorkspace({
       );
       return;
     }
+    
+    // Submit to the backend API
+    try {
+      await sessionsApi.submit(session.sessionId);
+      console.log("Assessment submitted to backend successfully");
+    } catch (error) {
+      console.error("Failed to submit to backend:", error);
+      // Continue anyway - the local submission is saved
+    }
+    
     currentRef.current = next;
     setCurrent(next);
     window.history.pushState({}, "", `/candidate/assessments/${session.assignmentId}/submission`);

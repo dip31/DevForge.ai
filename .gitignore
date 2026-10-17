@@ -43,3 +43,6 @@ coverage/
 
 # OpenHands temporary per-run workspaces (never commit)
 .openhands-workspaces/
+
+.env.openhands
+.openhands_agent_server_config.toml

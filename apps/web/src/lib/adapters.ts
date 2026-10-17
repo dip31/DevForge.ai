@@ -15,7 +15,9 @@ import type {
   UpdateAssessmentRequest,
 } from "@contracts/assessment";
 
-import type { Assessment as UiAssessment } from "../data";
+import type { CandidateAssignment as ApiCandidateAssignment } from "@contracts/assignments";
+
+import type { Assessment as UiAssessment, CandidateAssignment as UiCandidateAssignment } from "../data";
 
 const DIFFICULTY_LABELS: Record<string, string> = {
   beginner: "Beginner",
@@ -36,6 +38,30 @@ export function formatUpdated(iso: string | null | undefined): string {
 
 export function formatAssessmentStatus(status: string): UiAssessment["status"] {
   return status === "published" ? "Published" : "Draft";
+}
+
+export function apiCandidateAssignmentToUi(assignment: ApiCandidateAssignment): UiCandidateAssignment {
+  const taskDetails = assignment.taskDetails || {};
+  const skills = taskDetails.skills || "";
+  const skillsArray = skills ? skills.split(",").map(s => s.trim()).filter(Boolean) : [];
+  
+  return {
+    id: assignment.id,
+    companyId: assignment.organizationId,
+    company: taskDetails.company || "Unknown Company",
+    assessment: taskDetails.title || "Assessment",
+    task: taskDetails.title || "Assessment",
+    description: taskDetails.description || "",
+    duration: taskDetails.durationMinutes || 60,
+    deadline: assignment.deadline ? new Date(assignment.deadline).toLocaleDateString() : undefined,
+    difficulty: formatDifficulty(taskDetails.difficulty || "intermediate"),
+    skills: skillsArray,
+    implemented: true,
+    starterFiles: taskDetails.starterFiles || [],
+    instructions: taskDetails.instructions,
+    aiPolicy: taskDetails.aiPolicy,
+    taskDetails,
+  };
 }
 
 export function apiAssessmentToUi(assessment: ApiAssessment): UiAssessment {

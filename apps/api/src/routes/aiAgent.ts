@@ -36,12 +36,12 @@ import {
 } from "../services/openhands";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const OPENHANDS_PROVIDER = "openhands";
+const OPENHANDS_PROVIDER = "local"; // OpenHands uses "local" in the DB schema
 
 type PersistRunParams = {
   access: SessionAccessSuccess;
   sessionId: string;
-  provider: string;
+  provider: "openai" | "anthropic" | "groq" | "local";
   model: string;
   prompt: string;
   content: string;
@@ -171,7 +171,7 @@ export async function aiAgentRoutes(fastify: FastifyInstance) {
       };
     }
 
-    if (!isGroqConfigured()) {
+    if (!isGroqConfigured() && !isOpenHandsEnabled()) {
       return errorReply(
         reply,
         503,
@@ -180,6 +180,85 @@ export async function aiAgentRoutes(fastify: FastifyInstance) {
       );
     }
 
+    // Feature flag: OPENHANDS_ENABLED selects the coding-agent implementation.
+    // When enabled, use OpenHands; otherwise use the existing Groq path.
+    // No automatic fallback: if OpenHands is enabled but unavailable, surface
+    // the real error instead of silently using Groq.
+    const useOpenHands = isOpenHandsEnabled();
+
+    if (useOpenHands) {
+      let adapter;
+      try {
+        adapter = createOpenHandsAdapter();
+      } catch (error) {
+        if (error instanceof OpenHandsConfigError) {
+          return errorReply(reply, 503, "OPENHANDS_CONFIG_ERROR", error.message);
+        }
+        throw error;
+      }
+
+      let openHandsResult;
+      try {
+        openHandsResult = await adapter.runTask({
+          store,
+          prompt: body.prompt,
+          taskContext,
+          history: body.history,
+          sessionId: isPersisted ? sessionId : null,
+        });
+      } catch (error) {
+        if (error instanceof OpenHandsRuntimeError) {
+          return errorReply(reply, error.statusCode, error.code.toUpperCase(), error.message, {
+            retryAfterSeconds: error.retryAfterSeconds ?? null,
+            detail: error.detail ?? null,
+          });
+        }
+        request.log.error(error);
+        return errorReply(reply, 502, "OPENHANDS_RUNTIME_ERROR", "The OpenHands agent run failed.");
+      }
+
+      const latencyMs = Math.max(0, Date.now() - startedAt);
+      const createdAt = new Date().toISOString();
+      let responseId = `agent_${createdAt}`;
+
+      if (isPersisted && access) {
+        responseId = await persistAgentRun({
+          access,
+          sessionId,
+          provider: OPENHANDS_PROVIDER,
+          model: openHandsResult.model,
+          prompt: body.prompt,
+          content: openHandsResult.content,
+          operations: openHandsResult.operations,
+          latencyMs,
+          tokensUsed: 0,
+          metadata: {
+            stopReason: openHandsResult.stopReason,
+            appliedCount: openHandsResult.appliedCount,
+            pendingCount: openHandsResult.pendingCount,
+            failedCount: openHandsResult.failedCount,
+            warnings: openHandsResult.warnings,
+          },
+        });
+      }
+
+      const response: AgentResponse = {
+        id: responseId,
+        sessionId,
+        content: openHandsResult.content,
+        provider: "openhands", // Client-facing identifier
+        model: openHandsResult.model,
+        operations: openHandsResult.operations,
+        stopReason: openHandsResult.stopReason,
+        tokensUsed: 0,
+        latencyMs,
+        persisted: isPersisted && openHandsResult.persisted,
+        createdAt,
+      };
+      return reply.status(isPersisted ? 201 : 200).send({ success: true, data: response });
+    }
+
+    // Groq path (existing implementation)
     let result: AgentRunResult;
     try {
       result = await runAgent({

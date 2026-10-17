@@ -10,7 +10,7 @@ import {
   WorkspaceFile,
   AgentOperationView,
 } from "./data";
-import { aiCoachApi, aiAgentApi } from "./lib/api-endpoints";
+import { aiCoachApi, aiAgentApi, sessionsApi } from "./lib/api-endpoints";
 import { isApiError, getErrorMessage } from "./lib/api";
 import type { AiCoachContext } from "@contracts/ai";
 import type { AgentOperation } from "@contracts/agent";
@@ -347,7 +347,7 @@ export function CandidateAssignmentCards({
                 )}
               </div>
               <div className="assignment-skills">
-                {assignment.skills.slice(0, compact ? 3 : 5).map((skill) => (
+                {(assignment.skills || []).slice(0, compact ? 3 : 5).map((skill) => (
                   <span key={skill}>{skill}</span>
                 ))}
               </div>
@@ -637,19 +637,40 @@ export function AssessmentOnboarding({
   persist: PersistSession;
 }) {
   const [acknowledged, setAcknowledged] = useState(false);
-  const begin = () => {
+  const begin = async () => {
     if (session?.assignmentId === assignment.id) {
       go(`/candidate/assessments/${assignment.id}/workspace`);
       return;
     }
+    
     const initialFiles: WorkspaceFile[] = assignment.starterFiles
       ? structuredClone(assignment.starterFiles)
       : assignment.id === "novatech-task-manager"
         ? structuredClone(starterWorkspaceFiles)
         : [];
+    
+    console.log("Starting assessment:", {
+      assignmentId: assignment.id,
+      starterFiles: assignment.starterFiles,
+      initialFilesCount: initialFiles.length,
+    });
+    
+    // Create/start the session in the backend
+    let backendSessionId: string;
+    let startedAt: string;
+    try {
+      const backendSession = await sessionsApi.start({ assignmentId: assignment.id });
+      console.log("Backend session created:", backendSession.data);
+      backendSessionId = (backendSession.data as any).id;
+      startedAt = (backendSession.data as any).startedAt ?? new Date().toISOString();
+    } catch (error) {
+      console.error("Failed to create backend session:", error);
+      alert("Failed to start assessment. Please try again or contact support.");
+      return;
+    }
+    
     const firstFilePath = initialFiles[0]?.path ?? "";
 
-    const startedAt = now();
     const event: ActivityEvent = {
       id: uid("event"),
       type: "assessment_started",
@@ -699,7 +720,7 @@ export function AssessmentOnboarding({
     };
 
     const next: AssessmentSession = {
-      sessionId: uid("session"),
+      sessionId: backendSessionId,
       candidateId: (assignment as any).candidateId ?? "alex-morgan",
       companyId: assignment.companyId,
       assignmentId: assignment.id,
@@ -732,7 +753,12 @@ export function AssessmentOnboarding({
       activity: activityList,
       taskDetails,
     };
-    if (persist(next)) go(`/candidate/assessments/${assignment.id}/workspace`);
+    if (persist(next)) {
+      console.log("Session persisted successfully with backend ID:", backendSessionId);
+      go(`/candidate/assessments/${assignment.id}/workspace`);
+    } else {
+      console.error("Failed to persist session!");
+    }
   };
   return (
     <div className="onboarding-page">

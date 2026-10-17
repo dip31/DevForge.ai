@@ -62,6 +62,9 @@ export const authApi = {
   upsertProfile: () => api.post<{ success: true; data: AppProfile }>("/api/v1/auth/profile"),
 
   getProfile: () => api.get<{ success: true; data: AppProfile }>("/api/v1/auth/profile"),
+
+  getProfileByEmail: (email: string) =>
+    api.get<{ success: true; data: AppProfile }>(`/api/v1/auth/profile/by-email/${encodeURIComponent(email)}`),
 };
 
 export const organizationsApi = {

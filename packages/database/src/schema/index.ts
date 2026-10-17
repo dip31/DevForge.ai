@@ -11,3 +11,4 @@ export * from "./ai";
 export * from "./notifications";
 export * from "./audit";
 export * from "./integrations";
+export * from "./analysis";

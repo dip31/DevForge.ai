@@ -276,15 +276,22 @@ export async function assessmentRoutes(fastify: FastifyInstance) {
       });
     }
 
+    const now = new Date();
     const [updated] = await db
       .update(assessments)
       .set({
         status: "published",
-        publishedAt: new Date(),
-        updatedAt: new Date(),
+        publishedAt: now,
+        updatedAt: now,
       })
       .where(eq(assessments.id, id))
       .returning();
+
+    // Also update the current version's publishedAt
+    await db
+      .update(assessmentVersions)
+      .set({ publishedAt: now })
+      .where(and(eq(assessmentVersions.assessmentId, id), eq(assessmentVersions.isCurrent, true)));
 
     return reply.send({ success: true, data: updated });
   });

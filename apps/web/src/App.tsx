@@ -20,11 +20,12 @@ import {
 } from "./data";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { getErrorMessage } from "./lib/api";
-import { assessmentsApi, authApi, organizationsApi } from "./lib/api-endpoints";
+import { assessmentsApi, authApi, organizationsApi, assignmentsApi } from "./lib/api-endpoints";
 import { resolveInitialOrganizationId, slugify } from "./lib/organizations";
 import type { OrganizationWithRole, CreateOrganizationRequest } from "@contracts/auth";
 import {
   apiAssessmentToUi,
+  apiCandidateAssignmentToUi,
   toCreateAssessmentRequest,
   toUpdateAssessmentRequest,
 } from "./lib/adapters";
@@ -2694,7 +2695,7 @@ function AssessmentsPage({
                             onClick={() => {
                               const deadline = new Date(
                                 Date.now() + 30 * 24 * 60 * 60 * 1000,
-                              ).toLocaleDateString();
+                              ).toISOString();
 
                               onAssign(item, organizationId, organizationName, deadline);
                             }}
@@ -2745,65 +2746,156 @@ function CandidatesPage({
 }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All statuses");
+  const [assignments, setAssignments] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchAssignments = async () => {
+      try {
+        const currentUser = JSON.parse(localStorage.getItem("devforge-current-user") || "null");
+        const orgId = currentUser?.organizationId;
+        const response = await assignmentsApi.list({
+          organizationId: orgId,
+          page: 1,
+          limit: 100,
+        });
+        if (!cancelled) {
+          setAssignments(response.data.items);
+          setLoading(false);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to fetch candidates:", error);
+          setLoading(false);
+        }
+      }
+    };
+    fetchAssignments();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   if (path !== "/recruiter/candidates") {
-    if (path.endsWith("/alex-morgan") && evaluation) {
+    const candidate = assignments.find((item) => path.includes(item.candidateId)) ?? null;
+    
+    if (candidate && candidate.status === "submitted" && candidate.submittedAt) {
+      // For submitted assignments, show submission details
+      const initials = (candidate.candidateName || candidate.candidateEmail || "?")
+        .split(" ")
+        .map((n: string) => n[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 2);
+      
       return (
         <>
           <button className="back-link" onClick={() => navigate("/recruiter/candidates")}>
             ← Back to candidates
           </button>
           <PageHeader
-            eyebrow={`${evaluation.companyName} · Candidate profile`}
-            title={evaluation.candidateName}
-            copy={`${evaluation.assessmentTitle} — ${evaluation.taskTitle}`}
-            action={
-              <Button onClick={() => navigate(`/recruiter/reports/${evaluation.id}`)} icon="report">
-                View Assessment Report
-              </Button>
-            }
+            eyebrow={`${candidate.taskDetails?.company || "Company"} · Candidate submission`}
+            title={candidate.candidateName || candidate.candidateEmail || "Candidate"}
+            copy={`${candidate.taskDetails?.title || "Assessment"} — Submitted`}
+            action={<DemoTag />}
           />
           <div className="card candidate-report-profile">
             <div>
-              <small>Submission</small>
-              <strong>{new Date(evaluation.submissionTimestamp).toLocaleString()}</strong>
+              <small>Submission date</small>
+              <strong>{new Date(candidate.submittedAt).toLocaleString()}</strong>
             </div>
             <div>
-              <small>Evaluation status</small>
-              <strong>{evaluation.evaluationStatus}</strong>
+              <small>Status</small>
+              <strong>Submitted</strong>
             </div>
             <div>
-              <small>Human review</small>
-              <strong>{evaluation.reviewerStatus}</strong>
+              <small>Assessment</small>
+              <strong>{candidate.taskDetails?.title || "Assessment"}</strong>
             </div>
             <div>
-              <small>Evidence coverage</small>
-              <strong>{evaluation.evidenceCoverage}%</strong>
+              <small>Review status</small>
+              <strong>Pending review</strong>
+            </div>
+          </div>
+          <div className="card" style={{ padding: "2rem" }}>
+            <div style={{ display: "flex", gap: "1rem", alignItems: "start" }}>
+              <span style={{ 
+                width: "48px", 
+                height: "48px", 
+                borderRadius: "12px", 
+                background: "#f3f4f6",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0
+              }}>
+                <Icon name="info" size={24} />
+              </span>
+              <div>
+                <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "1.125rem", fontWeight: 600 }}>
+                  Full report generation requires workspace session data
+                </h3>
+                <p style={{ margin: "0 0 1rem 0", color: "#6b7280", lineHeight: 1.6 }}>
+                  To generate a complete evaluation report with code evidence, test results, and AI collaboration analysis, 
+                  the system needs access to the candidate's workspace session data (code snapshots, test runs, coach interactions). 
+                  This data is currently stored separately from the assignment record.
+                </p>
+                <p style={{ margin: "0 0 1rem 0", color: "#6b7280", lineHeight: 1.6 }}>
+                  <strong>Available information:</strong> Assignment metadata, submission timestamp, and candidate details are 
+                  stored in the backend database. Full workspace evidence and session history are maintained separately.
+                </p>
+                <p style={{ margin: "0", color: "#6b7280", lineHeight: 1.6 }}>
+                  <strong>Next step:</strong> Implement session data retrieval from the workspace service or stored session snapshots 
+                  to enable full report generation for database-stored submissions.
+                </p>
+              </div>
             </div>
           </div>
         </>
       );
     }
-    const candidate = candidates.find((item) => path.includes(item.id)) ?? candidates[0];
-    return (
-      <DetailPreview
-        kind="candidate"
-        title={candidate.name}
-        subtitle={candidate.assessment}
-        back="/recruiter/candidates"
-      />
-    );
+    
+    if (candidate) {
+      // For non-submitted assignments, show the placeholder
+      return (
+        <DetailPreview
+          kind="candidate"
+          title={candidate.candidateName || candidate.candidateEmail || "Candidate"}
+          subtitle={candidate.taskDetails?.title || "Assessment"}
+          back="/recruiter/candidates"
+        />
+      );
+    }
+    return null;
   }
-  const filtered = candidates.filter(
-    (item) =>
-      item.name.toLowerCase().includes(search.toLowerCase()) &&
-      (filter === "All statuses" || item.status === filter),
+
+  const statusMap: Record<string, string> = {
+    invited: "Invited",
+    in_progress: "In progress",
+    submitted: "Submitted",
+    evaluated: "Evaluated",
+    reviewed: "Reviewed",
+    expired: "Expired",
+    withdrawn: "Withdrawn",
+  };
+
+  const filtered = assignments.filter(
+    (item) => {
+      const candidateName = item.candidateName || item.candidateEmail || "";
+      const matchesSearch = candidateName.toLowerCase().includes(search.toLowerCase());
+      const itemStatus = statusMap[item.status] || item.status;
+      const matchesFilter = filter === "All statuses" || itemStatus === filter;
+      return matchesSearch && matchesFilter;
+    },
   );
+
   return (
     <>
       <PageHeader
         eyebrow="Talent pipeline"
         title="Candidates"
-        copy="Track illustrative candidate progress and review status."
+        copy="Track candidate progress and review status."
         action={<DemoTag />}
       />
       <div className="filters">
@@ -2818,91 +2910,89 @@ function CandidatesPage({
         </div>
         <select value={filter} onChange={(e) => setFilter(e.target.value)}>
           <option>All statuses</option>
-          <option>Submitted</option>
-          <option>In progress</option>
           <option>Invited</option>
+          <option>In progress</option>
+          <option>Submitted</option>
+          <option>Evaluated</option>
+          <option>Reviewed</option>
         </select>
       </div>
       <div className="card">
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Candidate</th>
-                <th>Assessment</th>
-                <th>Status</th>
-                <th>Submission date</th>
-                <th>Review status</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {evaluation && (
+        {loading ? (
+          <div style={{ padding: "2rem", textAlign: "center" }}>Loading candidates...</div>
+        ) : filtered.length === 0 ? (
+          <div style={{ padding: "2rem", textAlign: "center" }}>
+            No candidates found. Create an assignment to get started.
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
                 <tr>
-                  <td>
-                    <div className="person-cell">
-                      <span className="avatar small-avatar">AM</span>
-                      <strong>{evaluation.candidateName}</strong>
-                    </div>
-                  </td>
-                  <td>{evaluation.assessmentTitle}</td>
-                  <td>
-                    <Badge tone="success">Submitted</Badge>
-                  </td>
-                  <td>{new Date(evaluation.submissionTimestamp).toLocaleDateString()}</td>
-                  <td>{evaluation.reviewerStatus}</td>
-                  <td>
-                    <Button
-                      variant="ghost"
-                      onClick={() => navigate("/recruiter/candidates/alex-morgan")}
-                    >
-                      View <Icon name="arrow" />
-                    </Button>
-                  </td>
+                  <th>Candidate</th>
+                  <th>Assessment</th>
+                  <th>Status</th>
+                  <th>Date</th>
+                  <th>Review status</th>
+                  <th></th>
                 </tr>
-              )}
-              {filtered.map((item) => (
-                <tr key={item.id}>
-                  <td>
-                    <div className="person-cell">
-                      <span className="avatar small-avatar">
-                        {item.name
-                          .split(" ")
-                          .map((n) => n[0])
-                          .join("")}
-                      </span>
-                      <strong>{item.name}</strong>
-                    </div>
-                  </td>
-                  <td>{item.assessment}</td>
-                  <td>
-                    <Badge
-                      tone={
-                        item.status === "Submitted"
-                          ? "success"
-                          : item.status === "In progress"
-                            ? "warning"
-                            : "neutral"
-                      }
-                    >
-                      {item.status}
-                    </Badge>
-                  </td>
-                  <td>{item.date}</td>
-                  <td>{item.review}</td>
-                  <td>
-                    <Button
-                      variant="ghost"
-                      onClick={() => navigate(`/recruiter/candidates/${item.id}`)}
-                    >
-                      View <Icon name="arrow" />
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {filtered.map((item) => {
+                  const status = statusMap[item.status] || item.status;
+                  const badgeTone = 
+                    status === "Submitted" || status === "Evaluated" || status === "Reviewed"
+                      ? "success"
+                      : status === "In progress"
+                        ? "warning"
+                        : "neutral";
+                  const initials = (item.candidateName || item.candidateEmail || "?")
+                    .split(" ")
+                    .map((n: string) => n[0])
+                    .join("")
+                    .toUpperCase()
+                    .slice(0, 2);
+                  return (
+                    <tr key={item.id}>
+                      <td>
+                        <div className="person-cell">
+                          <span className="avatar small-avatar">{initials}</span>
+                          <div>
+                            <strong>{item.candidateName || "Unknown"}</strong>
+                            <br />
+                            <small style={{ opacity: 0.6 }}>{item.candidateEmail}</small>
+                          </div>
+                        </div>
+                      </td>
+                      <td>{item.taskDetails?.title || "Assessment"}</td>
+                      <td>
+                        <Badge tone={badgeTone}>
+                          {status}
+                        </Badge>
+                      </td>
+                      <td>
+                        {item.submittedAt
+                          ? new Date(item.submittedAt).toLocaleDateString()
+                          : item.startedAt
+                            ? new Date(item.startedAt).toLocaleDateString()
+                            : new Date(item.createdAt).toLocaleDateString()}
+                      </td>
+                      <td>{status === "Submitted" ? "Pending review" : "—"}</td>
+                      <td>
+                        <Button
+                          variant="ghost"
+                          onClick={() => navigate(`/recruiter/candidates/${item.candidateId}`)}
+                        >
+                          View <Icon name="arrow" />
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </>
   );
@@ -3294,10 +3384,15 @@ function AppInner() {
   const [candidateAssignmentsState, setCandidateAssignmentsState] = useState<CandidateAssignment[]>(
     () => {
       try {
-        return (
-          JSON.parse(localStorage.getItem("devforge-candidate-assignments") ?? "null") ??
-          initialCandidateAssignments
-        );
+        const stored = JSON.parse(localStorage.getItem("devforge-candidate-assignments") ?? "null");
+        // Validate that stored assignments have the required structure
+        if (Array.isArray(stored)) {
+          return stored.map(a => ({
+            ...a,
+            skills: Array.isArray(a.skills) ? a.skills : []
+          }));
+        }
+        return initialCandidateAssignments;
       } catch {
         return initialCandidateAssignments;
       }
@@ -3411,6 +3506,24 @@ function AppInner() {
       cancelled = true;
     };
   }, [supabaseSession, session?.role, selectedOrganizationId]);
+
+  // Fetch candidate assignments from API
+  useEffect(() => {
+    if (!supabaseSession?.user || session?.role !== "candidate") return;
+    let cancelled = false;
+    assignmentsApi
+      .getMyAssignments()
+      .then((response) => {
+        if (cancelled) return;
+        setCandidateAssignmentsState(response.data.map(apiCandidateAssignmentToUi));
+      })
+      .catch((error) => {
+        if (!cancelled) console.error("Failed to load assignments:", getErrorMessage(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [supabaseSession, session?.role]);
   useEffect(() => {
     localStorage.setItem("code-apex-rubrics", JSON.stringify(rubrics));
   }, [rubrics]);
@@ -3600,7 +3713,7 @@ function AppInner() {
     );
     if (candidateAssessmentRoute?.[2] === "workspace") {
       const routeAssignmentId = candidateAssessmentRoute[1];
-      const assignment = getAssignment(routeAssignmentId);
+      const assignment = candidateAssignmentsState.find(a => a.id === routeAssignmentId);
       if (assignment) {
         let activeSession = assessmentSession;
         if (!activeSession || activeSession.assignmentId !== routeAssignmentId) {
@@ -3615,85 +3728,10 @@ function AppInner() {
           } catch {}
         }
         if (!activeSession || activeSession.assignmentId !== routeAssignmentId) {
-          const initialFiles = assignment.starterFiles
-            ? structuredClone(assignment.starterFiles)
-            : assignment.id === "novatech-task-manager"
-              ? structuredClone(starterWorkspaceFiles)
-              : [];
-          const firstFilePath = initialFiles[0]?.path ?? "";
-          const startedAt = new Date().toISOString();
-          activeSession = {
-            sessionId: `session-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            candidateId: (assignment as any).candidateId ?? "alex-morgan",
-            companyId: assignment.companyId,
-            assignmentId: assignment.id,
-            assessmentId: assignment.assessment || assignment.id,
-            startedAt,
-            durationMinutes: assignment.duration,
-            currentFile: firstFilePath,
-            files: initialFiles,
-            savedFiles: structuredClone(initialFiles),
-            unsaved: false,
-            revisions: [
-              {
-                id: "revision-0",
-                timestamp: startedAt,
-                files: structuredClone(initialFiles),
-              },
-            ],
-            coachMessages: [
-              {
-                id: `message-${Date.now()}`,
-                role: "coach",
-                timestamp: startedAt,
-                content:
-                  "Welcome to the AI Coach. You can ask for hints on failed tests, active file information, or debug guidance. Responses use the workspace context you can already see.",
-                explanation: "Welcome message shown when the session starts.",
-              },
-            ],
-            runHistory: [],
-            testRuns: [],
-            activity: [
-              {
-                id: `event-${Date.now()}`,
-                type: "assessment_started",
-                timestamp: startedAt,
-                detail: "Candidate entered workspace.",
-                provenance: "candidate_action",
-              },
-            ],
-            taskDetails: assignment.taskDetails ?? {
-              title: assignment.task,
-              description: assignment.description,
-              company: assignment.company,
-              role: assignment.assessment,
-              skills: Array.isArray(assignment.skills)
-                ? assignment.skills.join(", ")
-                : assignment.skills,
-              durationMinutes: assignment.duration,
-              difficulty: assignment.difficulty,
-              instructions: assignment.instructions ?? null,
-              aiPolicy: assignment.aiPolicy ?? null,
-              requirements:
-                assignment.id === "novatech-task-manager"
-                  ? [
-                      "Add a task",
-                      "Set task priority",
-                      "Mark a task complete",
-                      "Filter tasks by status",
-                      "Display an empty state",
-                      "Preserve task state during interaction",
-                    ]
-                  : assignment.skills,
-              allowedImports: [],
-              starterFiles: initialFiles.map((f) => ({
-                path: f.path,
-                language: f.language,
-                isReadOnly: f.readOnly,
-              })),
-            },
-          };
-          persistAssessmentSession(activeSession);
+          // No session found — redirect to onboarding so backend session gets created properly
+          window.history.replaceState({}, "", `/candidate/assessments/${routeAssignmentId}/onboarding`);
+          window.dispatchEvent(new PopStateEvent("popstate"));
+          return null;
         }
         return <IdeWorkspace session={activeSession} persist={persistAssessmentSession} />;
       }
@@ -3794,7 +3832,7 @@ function AppInner() {
         />
       );
     else if (candidateAssessmentRoute) {
-      const assignment = getAssignment(candidateAssessmentRoute[1]);
+      const assignment = candidateAssignmentsState.find(a => a.id === candidateAssessmentRoute[1]);
       const mode = candidateAssessmentRoute[2];
       if (!assignment)
         page = (
@@ -3856,34 +3894,53 @@ function AppInner() {
               setToast(getErrorMessage(error));
             }
           }}
-          onAssign={(assessment, companyId, companyName, deadline) => {
-            const assignment: CandidateAssignment = {
-              id: `assignment-${Date.now()}`,
+          onAssign={async (assessment, companyId, companyName, deadline) => {
+            if (!selectedOrganizationId) {
+              setToast("Select an organization before assigning.");
+              return;
+            }
+            
+            // Prompt for candidate email to look up their user ID
+            const candidateEmail = prompt(
+              "Enter candidate email address:\n\n(The candidate must have logged in at least once to create their profile)"
+            );
+            
+            if (!candidateEmail) {
+              return;
+            }
+            
+            try {
+              // Look up the candidate by email via the profile endpoint
+              const profileResponse = await authApi.getProfileByEmail(candidateEmail);
+              const candidateId = profileResponse.data.id;
+              
+              console.log("Creating assignment:", {
+                assessmentId: assessment.id,
+                candidateId,
+                candidateEmail,
+                deadline,
+              });
+              
+              await assignmentsApi.create({
+                assessmentId: assessment.id,
+                candidateId,
+                deadline,
+                metadata: {},
+              });
 
-              companyId,
-
-              company: companyName,
-
-              assessment: assessment.title,
-
-              task: assessment.title,
-
-              description: assessment.description,
-
-              duration: assessment.duration,
-
-              deadline,
-
-              difficulty: assessment.difficulty,
-
-              skills: assessment.skills.split(", ").map((s) => s.trim()),
-
-              implemented: true,
-            };
-
-            setCandidateAssignmentsState([...candidateAssignmentsState, assignment]);
-
-            setToast(`Assigned "${assessment.title}" to ${companyName}`);
+              setToast(`Assigned "${assessment.title}" to ${candidateEmail} successfully!`);
+            } catch (error) {
+              const errorMsg = getErrorMessage(error);
+              console.error("Assignment failed:", error);
+              
+              if (errorMsg.includes("not found") || errorMsg.includes("NOT_FOUND")) {
+                setToast(
+                  `Candidate ${candidateEmail} not found. They need to log in at least once to create their profile.`
+                );
+              } else {
+                setToast(`Failed to assign: ${errorMsg}`);
+              }
+            }
           }}
         />
       );
@@ -3946,15 +4003,50 @@ function AppInner() {
       );
     } else if (path.startsWith("/recruiter/candidates"))
       page = <CandidatesPage path={path} evaluation={evaluation} />;
-    else if (path.startsWith("/recruiter/reports"))
+    else if (path.startsWith("/recruiter/reports")) {
+      // Check if URL contains a specific evaluation ID
+      const evaluationIdMatch = path.match(/\/recruiter\/reports\/(evaluation-[^/]+)/);
+      let reportSession = assessmentSession;
+      let reportEvaluation = evaluation;
+      
+      if (evaluationIdMatch) {
+        const requestedEvalId = evaluationIdMatch[1];
+        
+        // Try to load the requested evaluation from history
+        try {
+          const history = JSON.parse(localStorage.getItem("devforge-evaluation-history") ?? "[]");
+          const foundEval = Array.isArray(history) 
+            ? history.find((e: any) => e.id === requestedEvalId) 
+            : null;
+          
+          if (foundEval) {
+            reportEvaluation = foundEval;
+            
+            // Try to load the corresponding session
+            const sessionKey = `devforge-session-${foundEval.assignmentId}`;
+            const sessionData = localStorage.getItem(sessionKey);
+            if (sessionData) {
+              const parsedSession = JSON.parse(sessionData);
+              if (parsedSession.sessionId === foundEval.sessionId) {
+                reportSession = parsedSession;
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Failed to load evaluation from history:", error);
+        }
+      }
+      
       page = (
         <RecruiterReportsPage
           path={path}
-          session={assessmentSession}
-          evaluation={evaluation}
+          session={reportSession}
+          evaluation={reportEvaluation}
           persist={persistEvaluation}
+          organizationId={selectedOrganizationId ?? undefined}
         />
       );
+    }
     else if (path === "/recruiter/tasks")
       page = (
         <TasksPage

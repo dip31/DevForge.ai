@@ -59,7 +59,7 @@ export class NodeFileSystem implements FileSystem {
 
   async listFiles(dir: string): Promise<string[]> {
     const out: string[] = [];
-    await walk(dir, "", out, () => {});
+    await walk(dir, "", (rel) => out.push(rel), () => {});
     return out;
   }
 

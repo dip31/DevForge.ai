@@ -1,5 +1,5 @@
-import { ReactNode, useMemo, useState } from "react";
-import { AssessmentSession } from "./data";
+import { ReactNode, useMemo, useState, useEffect } from "react";
+import { AssessmentSession, CandidateAssignment } from "./data";
 import {
   CriterionFinding,
   effectiveCriterionStatus,
@@ -9,6 +9,7 @@ import {
   EvidenceType,
   ReviewEvent,
 } from "./evidence";
+import { assignmentsApi } from "./lib/api-endpoints";
 import "./evaluation.css";
 
 type PersistEvaluation = (evaluation: EvaluationRecord) => boolean;
@@ -245,9 +246,11 @@ const evaluationStatuses: EvaluationStatus[] = [
 function ReportsOverviewV2({
   session,
   evaluation,
+  organizationId,
 }: {
   session: AssessmentSession | null;
   evaluation: EvaluationRecord | null;
+  organizationId?: string;
 }) {
   const [search, setSearch] = useState("");
   const [assessment, setAssessment] = useState("All assessments");
@@ -256,6 +259,36 @@ function ReportsOverviewV2({
   const [reviewStatus, setReviewStatus] = useState("All review statuses");
   const [date, setDate] = useState("Any submission date");
   const [sort, setSort] = useState("Most recent submission");
+  const [submittedAssignments, setSubmittedAssignments] = useState<CandidateAssignment[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchSubmitted = async () => {
+      try {
+        const response = await assignmentsApi.list({
+          status: "submitted",
+          organizationId,
+          page: 1,
+          limit: 100,
+        });
+        if (!cancelled) {
+          setSubmittedAssignments(response.data.items);
+          setLoading(false);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to fetch submitted assignments:", error);
+          setLoading(false);
+        }
+      }
+    };
+    fetchSubmitted();
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId]);
+
   const submitted = !!session?.submittedAt;
   const matches =
     !!evaluation &&
@@ -302,8 +335,8 @@ function ReportsOverviewV2({
           </span>
           <div>
             <small>Submitted reports</small>
-            <strong>{submitted ? 1 : 0}</strong>
-            <p>Actual locally saved submissions</p>
+            <strong>{loading ? "..." : submittedAssignments.length}</strong>
+            <p>From backend database</p>
           </div>
         </article>
         <article className="card">
@@ -396,68 +429,54 @@ function ReportsOverviewV2({
           </select>
         </div>
       </section>
-      {!evaluation || !submitted ? (
+      {loading ? (
+        <div className="card" style={{ padding: "2rem", textAlign: "center" }}>
+          Loading submitted assessments...
+        </div>
+      ) : submittedAssignments.length === 0 ? (
         <EmptyEvaluation
           title="No submitted assessment reports"
-          copy="A report appears only after a candidate submission is saved and the deterministic evaluation has completed."
+          copy="Submitted assignments will appear here after candidates complete and submit their assessments."
         />
-      ) : matches ? (
+      ) : (
         <section className="reports-table card">
           <div className="reports-table-head">
             <span>Candidate</span>
             <span>Assessment</span>
             <span>Submitted</span>
-            <span>Evaluation</span>
-            <span>Human review</span>
+            <span>Status</span>
             <span></span>
           </div>
-          <button
-            className="reports-table-row"
-            onClick={() => go(`/recruiter/reports/${evaluation.id}`)}
-          >
-            <span className="report-candidate-cell">
-              <i className="candidate-avatar">AM</i>
+          {submittedAssignments.map((assignment: any) => (
+            <div key={assignment.id} className="reports-table-row" style={{ padding: "1rem", borderBottom: "1px solid #eee", display: "grid", gridTemplateColumns: "1fr 2fr 1fr 1fr 1fr", gap: "1rem", alignItems: "center" }}>
               <span>
-                <strong>{evaluation.candidateName}</strong>
-                <small>{evaluation.companyName}</small>
+                <strong>{assignment.candidateName || assignment.candidateEmail || "Unknown"}</strong>
+                <br /><small style={{ opacity: 0.6 }}>{assignment.candidateEmail}</small>
               </span>
-            </span>
-            <span>
-              <strong>{evaluation.assessmentTitle}</strong>
-              <small>{evaluation.taskTitle}</small>
-            </span>
-            <span>
-              <strong>{new Date(evaluation.submissionTimestamp).toLocaleDateString()}</strong>
-              <small>{new Date(evaluation.submissionTimestamp).toLocaleTimeString()}</small>
-            </span>
-            <EvalStatus status={evaluation.evaluationStatus} />
-            <EvalStatus
-              status={
-                evaluation.reviewerStatus === "Pending"
-                  ? "Review Pending"
-                  : evaluation.reviewerStatus
-              }
-            />
-            <span className="view-report-action">
-              View Report <EIcon name="arrow" />
-            </span>
-          </button>
+              <span>
+                <strong>{assignment.taskDetails?.title || "Assessment"}</strong>
+                <br /><small style={{ opacity: 0.6 }}>{assignment.taskDetails?.company || "—"}</small>
+              </span>
+              <span>
+                <strong>
+                  {assignment.submittedAt
+                    ? new Date(assignment.submittedAt).toLocaleDateString()
+                    : "—"}
+                </strong>
+              </span>
+              <span>
+                <strong style={{ color: "#16a34a" }}>Submitted</strong>
+              </span>
+              <span style={{ color: "#6b7280", fontSize: "0.85rem" }}>
+                Ready for review
+              </span>
+            </div>
+          ))}
           <footer>
-            <span>Showing 1 of 1 report</span>
+            <span>Showing {submittedAssignments.length} report{submittedAssignments.length !== 1 ? "s" : ""}</span>
             <span>Sorted by {sort.toLowerCase()}</span>
           </footer>
         </section>
-      ) : (
-        <div className="eval-empty card">
-          <span>
-            <EIcon name="filter" />
-          </span>
-          <h2>No reports match these filters</h2>
-          <p>Clear the current search and filters to return to the available report.</p>
-          <button className="clear-report-filters" onClick={clear}>
-            Clear all filters
-          </button>
-        </div>
       )}
       <div className="evaluation-limit card">
         <EIcon name="info" />
@@ -1748,11 +1767,13 @@ export function RecruiterReportsPage({
   session,
   evaluation,
   persist,
+  organizationId,
 }: {
   path: string;
   session: AssessmentSession | null;
   evaluation: EvaluationRecord | null;
   persist: PersistEvaluation;
+  organizationId?: string;
 }) {
   const validEvaluation =
     evaluation && session && evaluation.sessionId === session.sessionId ? evaluation : null;
@@ -1775,7 +1796,7 @@ export function RecruiterReportsPage({
       </div>
     );
   if (path === "/recruiter/reports")
-    return <ReportsOverviewV2 session={session} evaluation={validEvaluation} />;
+    return <ReportsOverviewV2 session={session} evaluation={validEvaluation} organizationId={organizationId} />;
   if (!session?.submittedAt || !validEvaluation)
     return (
       <EmptyEvaluation

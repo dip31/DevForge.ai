@@ -67,7 +67,7 @@ export const candidateAssignmentSchema = z.object({
 
 export const createAssignmentRequestSchema = z.object({
   assessmentId: uuidSchema,
-  assessmentVersionId: uuidSchema,
+  assessmentVersionId: uuidSchema.optional(),
   candidateId: uuidSchema,
   deadline: isoDateSchema.optional(),
   expiresAt: isoDateSchema.optional(),

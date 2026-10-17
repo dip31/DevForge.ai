@@ -30,8 +30,7 @@ export type ChildProcessLike = {
   stdin: Writable | null;
   stdout: Readable | null;
   stderr: Readable | null;
-  on(event: "error", listener: (error: Error) => void): unknown;
-  on(event: "close", listener: (code: number | null) => void): unknown;
+  on(event: string, listener: (...args: any[]) => void): unknown;
   kill(signal?: NodeJS.Signals): boolean;
 };
 

@@ -18,6 +18,7 @@ import { reviewQueueRoutes } from "./routes/reviewQueue";
 import { practiceRoutes } from "./routes/practice";
 import { aiCoachRoutes } from "./routes/aiCoach";
 import { aiAgentRoutes } from "./routes/aiAgent";
+import { analysisRoutes } from "./routes/analysis";
 import { errorHandler } from "./middleware/errorHandler";
 import { authMiddleware } from "./middleware/auth";
 

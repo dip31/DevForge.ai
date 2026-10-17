@@ -12,3 +12,4 @@ export * from "./notifications";
 export * from "./ai";
 export * from "./coach";
 export * from "./agent";
+export * from "./analysis";

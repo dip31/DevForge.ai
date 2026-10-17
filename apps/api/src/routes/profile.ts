@@ -101,4 +101,22 @@ export async function profileRoutes(fastify: FastifyInstance) {
 
     return reply.send({ success: true, data: updated });
   });
+
+  // GET /profile/by-email/:email — lookup user by email (for assignment creation)
+  fastify.get("/profile/by-email/:email", { preHandler: authMiddleware }, async (request, reply) => {
+    const { email } = request.params as { email: string };
+    
+    const profile = await db.query.userProfiles.findFirst({
+      where: (p, { eq }) => eq(p.email, email),
+    });
+    
+    if (!profile) {
+      return reply.status(404).send({
+        success: false,
+        error: { code: "NOT_FOUND", message: "User not found" },
+      });
+    }
+    
+    return reply.send({ success: true, data: profile });
+  });
 }

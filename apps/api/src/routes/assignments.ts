@@ -6,6 +6,7 @@ import {
   assessmentVersions,
   users,
   organizationMemberships,
+  organizations,
 } from "@database/schema";
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
 import {
@@ -54,13 +55,49 @@ export async function assignmentRoutes(fastify: FastifyInstance) {
       .from(candidateAssignments)
       .where(where);
 
-    const items = await db
+    const rawItems = await db
       .select()
       .from(candidateAssignments)
       .where(where)
       .orderBy(desc(candidateAssignments.createdAt))
       .limit(Number(limit))
       .offset((Number(page) - 1) * Number(limit));
+
+    const items = await Promise.all(
+      rawItems.map(async (assignment) => {
+        const [version, assessment, organization, candidate] = await Promise.all([
+          db.query.assessmentVersions.findFirst({
+            where: (v, { eq }) => eq(v.id, assignment.assessmentVersionId),
+          }),
+          db.query.assessments.findFirst({
+            where: (a, { eq }) => eq(a.id, assignment.assessmentId),
+          }),
+          db.query.organizations.findFirst({
+            where: (o, { eq }) => eq(o.id, assignment.organizationId),
+          }),
+          db.query.users.findFirst({
+            where: (u, { eq }) => eq(u.id, assignment.candidateId),
+          }),
+        ]);
+        return {
+          ...assignment,
+          taskDetails: {
+            title: version?.title ?? assessment?.title,
+            description: version?.description ?? assessment?.description,
+            role: version?.role ?? assessment?.role,
+            skills: version?.skills ?? assessment?.skills,
+            durationMinutes: version?.durationMinutes ?? assessment?.durationMinutes,
+            difficulty: version?.difficulty ?? assessment?.difficulty,
+            instructions: version?.instructions,
+            aiPolicy: version?.aiPolicy,
+            company: organization?.name,
+            starterFiles: version?.starterFiles || [],
+          },
+          candidateName: candidate?.name ?? candidate?.email ?? "Unknown",
+          candidateEmail: candidate?.email,
+        };
+      }),
+    );
 
     return reply.send({
       success: true,
@@ -180,6 +217,9 @@ export async function assignmentRoutes(fastify: FastifyInstance) {
         const assessment = await db.query.assessments.findFirst({
           where: (a, { eq }) => eq(a.id, assignment.assessmentId),
         });
+        const organization = await db.query.organizations.findFirst({
+          where: (o, { eq }) => eq(o.id, assignment.organizationId),
+        });
         return {
           ...assignment,
           taskDetails: {
@@ -191,6 +231,8 @@ export async function assignmentRoutes(fastify: FastifyInstance) {
             difficulty: version?.difficulty ?? assessment?.difficulty,
             instructions: version?.instructions,
             aiPolicy: version?.aiPolicy,
+            company: organization?.name,
+            starterFiles: version?.starterFiles || [],
           },
         };
       }),
