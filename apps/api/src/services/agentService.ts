@@ -1,5 +1,6 @@
 import type { AiCoachHistoryMessage } from "@contracts/ai";
 import type { AgentOperation, AgentToolName } from "@contracts/agent";
+import type { AgentStreamEvent, AgentStreamPhase } from "@contracts/execution";
 import {
   AGENT_TOOL_DEFINITIONS,
   AGENT_TOOL_NAMES,
@@ -23,8 +24,8 @@ import {
 // approval. The loop is capped on iterations and detects no-progress repeats so
 // a confused model can never spin forever or escalate its own privileges.
 
-export const MAX_AGENT_ITERATIONS = 8;
-export const MAX_TOOL_CALLS_PER_TURN = 8;
+export const MAX_AGENT_ITERATIONS = 12;
+export const MAX_TOOL_CALLS_PER_TURN = 12;
 export const MAX_TOOL_RESULT_CHARS = 4000;
 
 const SYSTEM_RULES = `You are the DevForge.ai AI Coding Agent. You help a candidate complete their technical assessment by inspecting their authorized workspace and making small, task-focused file changes through the tools you are given.
@@ -41,6 +42,7 @@ Non-negotiable rules:
 - For an implementation request, always perform the file operation through a tool. Never output a code block, a mock project, or step-by-step instructions as a substitute for actually applying the change. If you cannot apply it, say so plainly.
 - Do not use placeholder or example URLs, secrets, or fake data. Write code appropriate to the active task and the existing workspace.
 - Prefer the smallest change that satisfies the request. Do not rewrite unrelated files. If the workspace is empty, create the files the task needs.
+- For a multi-file feature, create or update every file it needs in the same run (modules, wiring/imports, and tests) instead of stopping after a single file. Batch independent create/edit calls together. Make sure every import resolves to a file that exists after your changes.
 - Create a file only when it does not exist; to change an existing file, edit it. Never overwrite a file you have not read.
 - Reads run immediately. Creates, edits, and folders are applied to the workspace and reported as applied. Deletes are staged and only applied after the candidate explicitly approves them — say so in your summary.
 - Never claim you compiled, ran, or tested code. You cannot execute anything. Only state what you actually inspected or changed.
@@ -53,7 +55,35 @@ export type AgentRunInput = {
   prompt: string;
   history?: AiCoachHistoryMessage[];
   taskContext: AgentTaskContext;
+  // Optional live step callback. Every event reflects a real tool call the
+  // server actually executed — nothing is fabricated.
+  onEvent?: (event: AgentStreamEvent) => void;
 };
+
+function describeToolCall(name: string, args: Record<string, unknown>): { phase: AgentStreamPhase; detail: string } {
+  const path = typeof args.path === "string" ? args.path : "";
+  const query = typeof args.query === "string" ? args.query : "";
+  switch (name as AgentToolName) {
+    case "list_workspace_files":
+      return { phase: "analyzing", detail: "Listing workspace files" };
+    case "read_workspace_file":
+      return { phase: "analyzing", detail: `Inspecting ${path || "a file"}` };
+    case "search_workspace_files":
+      return { phase: "analyzing", detail: query ? `Searching for "${query}"` : "Searching the workspace" };
+    case "get_task_context":
+      return { phase: "analyzing", detail: "Reviewing task requirements" };
+    case "create_workspace_file":
+      return { phase: "writing", detail: `Creating ${path || "a file"}` };
+    case "edit_workspace_file":
+      return { phase: "writing", detail: `Updating ${path || "a file"}` };
+    case "create_workspace_directory":
+      return { phase: "writing", detail: `Creating folder ${path || ""}`.trim() };
+    case "delete_workspace_file":
+      return { phase: "deleting", detail: `Staging deletion of ${path || "a file"}` };
+    default:
+      return { phase: "analyzing", detail: `Running ${name}` };
+  }
+}
 
 export type AgentRunStopReason = "completed" | "max_iterations" | "no_progress" | "provider_error";
 
@@ -131,6 +161,8 @@ export async function runAgent(input: AgentRunInput): Promise<AgentRunResult> {
 
   const model = getGroqModel();
 
+  input.onEvent?.({ type: "step", phase: "planning", detail: "Reading the task context and planning changes" });
+
   for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration++) {
     iterations = iteration + 1;
     let completion;
@@ -174,6 +206,10 @@ export async function runAgent(input: AgentRunInput): Promise<AgentRunResult> {
       lastSignature = signature;
 
       const known = AGENT_TOOL_NAMES.includes(call.name as AgentToolName);
+      if (known && input.onEvent) {
+        const { phase, detail } = describeToolCall(call.name, call.arguments ?? {});
+        input.onEvent({ type: "step", phase, detail });
+      }
       const result = known
         ? await executeAgentTool({
             store: input.store,

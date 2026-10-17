@@ -42,18 +42,23 @@ This document describes the known security limitations and demo boundaries of th
 
 ### Current State
 
-- **No code execution**: The "Run" and "Test" features use a deterministic source analyzer (`analyzeTests`) that pattern-matches source code
-- **No sandbox**: Arbitrary candidate JavaScript is never executed
-- **Preview is simulated**: Live Preview uses a predefined React component adapter, not actual candidate code
-- **Terminal is simulated**: Demo terminal only supports `help`, `clear`, `pwd`, `ls`, `npm test`, `npm run`, `echo`
+- **Guardrailed subprocess execution (new)**: `apps/api/src/services/executorService.ts` runs candidate code for real. The candidate's workspace files are materialized into a per-run temporary directory (`mkdtemp` under the OS temp dir) and executed by a short-lived child process, then the directory is always removed.
+  - **Runtime allowlist**: only `node` (JavaScript/TypeScript via the `tsx` CLI) and `python` are ever spawned. No shell — `spawn(..., { shell: false })`. Environment is scrubbed to a small set of OS variables plus sandbox markers.
+  - **Bounded**: hard wall-clock timeout (default 10s, max 30s) with `SIGKILL` on expiry; stdout/stderr capped at 256 KB each; paths validated through `validateWorkspacePath`.
+  - **Standard input** is piped from the client-supplied stdin and the stream is closed so EOF-terminating programs finish.
+- **Real execution surfaced in the UI**: the workspace "Run" button calls `POST /api/v1/sessions/:id/execute` and the Output panel shows the genuine stdout/stderr/exit code/duration. The terminal remains a simulated command whitelist.
+- **AI test generation (new)**: `POST /api/v1/sessions/:id/ai-tests` asks the model to write a self-contained test harness for the real source, then executes it through the same sandbox. Per-case results are parsed from the harness's actual stdout — never fabricated. (The older deterministic `analyzeTests` pattern matcher still powers the "Run Tests" button.)
+- **Residual risk**: this is process isolation on the API host, not a hardened sandbox. A malicious program can still consume CPU within the timeout and touch anything the API process's OS user can reach. There is no network egress blocking, no CPU/memory cgroup limit, and no VM boundary.
 
 ### Production Requirements
 
-- Implement secure code execution sandbox (e.g., Firecracker microVMs, gVisor, or cloud-based runners like GitHub Actions / CodeSandbox)
-- Enforce CPU/memory limits, execution timeouts, filesystem isolation, network restrictions
+- Replace the subprocess runner with a real sandbox (e.g., Firecracker microVMs, gVisor, nsjail, or a cloud runner)
+- Enforce CPU/memory limits, filesystem isolation, and network egress restrictions
+- Drop privileges / run as an unprivileged, disposable user with a read-only root
 - Separate hidden tests from candidate-visible code
 - Implement secure dependency installation with allowlists
-- Add output size limits and safe cleanup
+- Keep output size limits and guaranteed cleanup (already present)
+- **Preview is still simulated**: Live Preview uses a predefined React component adapter, not actual candidate code
 
 ## 4. Evidence Integrity
 
@@ -195,7 +200,8 @@ The following features are explicitly **demo-only** and not production-ready:
 | Feature          | Demo Behavior                   | Production Gap                  |
 | ---------------- | ------------------------------- | ------------------------------- |
 | Authentication   | Hardcoded demo credentials      | Full auth system needed         |
-| Code execution   | Pattern-matching analyzer       | Secure sandbox required         |
+| Code execution   | Guardrailed subprocess sandbox  | VM/container sandbox required   |
+| AI tests         | Model-written harness, executed | Hidden tests + grader isolation |
 | Evidence storage | localStorage (tamperable)       | Append-only signed storage      |
 | Evaluation       | Rule-based deterministic        | LLM + human review pipeline     |
 | Assignments      | Created in recruiter UI only    | API + webhook integration       |
@@ -239,6 +245,6 @@ The following features are explicitly **demo-only** and not production-ready:
 
 ---
 
-**Last Updated**: 2025-01-13
+**Last Updated**: 2026-10-17
 **Version**: Phase 2 Prototype
 **Classification**: Internal - Demo Boundaries Documentation

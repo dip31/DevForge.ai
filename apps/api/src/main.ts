@@ -18,6 +18,8 @@ import { reviewQueueRoutes } from "./routes/reviewQueue";
 import { practiceRoutes } from "./routes/practice";
 import { aiCoachRoutes } from "./routes/aiCoach";
 import { aiAgentRoutes } from "./routes/aiAgent";
+import { executionRoutes } from "./routes/execution";
+import { previewRoutes } from "./routes/preview";
 import { errorHandler } from "./middleware/errorHandler";
 import { authMiddleware } from "./middleware/auth";
 
@@ -59,6 +61,9 @@ export async function buildApp() {
   // Profile routes (bootstrap POST uses token-only auth; GET/PATCH are protected)
   await app.register(profileRoutes, { prefix: "/api/v1/auth" });
 
+  // Preview routes (no auth; access gated by a short-lived token in the path)
+  await app.register(previewRoutes, { prefix: "/api/v1/preview" });
+
   // Protected routes (require authentication)
   await app.register(async function (fastify) {
     fastify.addHook("preHandler", authMiddleware);
@@ -86,6 +91,7 @@ export async function buildApp() {
     await fastify.register(practiceRoutes, { prefix: "/api/v1/practice" });
     await fastify.register(aiCoachRoutes, { prefix: "/api/v1/sessions" });
     await fastify.register(aiAgentRoutes, { prefix: "/api/v1/sessions" });
+    await fastify.register(executionRoutes, { prefix: "/api/v1/sessions" });
   });
 
   return app;

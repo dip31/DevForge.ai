@@ -151,16 +151,45 @@ const DEFAULT_TEMPERATURE = 0.2;
 export const MAX_RATE_LIMIT_RETRIES = 2;
 export const MAX_RETRY_WAIT_MS = 5000;
 
-let sharedClient: { apiKey: string; client: GroqClientLike } | null = null;
+let sharedClient: { key: string; client: GroqClientLike } | null = null;
+
+// The chat-completions base URL. Defaults to Groq's API; set GROQ_BASE_URL to
+// use any OpenAI-compatible gateway (OpenRouter, Together, etc.).
+function getBaseUrl(): string | undefined {
+  const raw = process.env.GROQ_BASE_URL?.trim();
+  return raw && raw.length > 0 ? raw : undefined;
+}
+
+// The Groq SDK hardcodes its request path as `/openai/v1/chat/completions`
+// (Groq's own API layout). Generic OpenAI-compatible gateways such as
+// OpenRouter expose `/chat/completions` directly under their base URL, so when
+// a custom base URL is configured we strip the extra `/openai/v1` prefix. This
+// keeps the SDK's own error classes (auth, rate-limit, timeout) intact.
+function gatewayFetch(
+  input: string | URL | Request,
+  init?: RequestInit,
+): Promise<Response> {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  const rewritten = url.includes("/openai/v1/") ? url.replace("/openai/v1/", "/") : url;
+  return globalThis.fetch(rewritten, init);
+}
 
 function getSharedClient(apiKey: string): GroqClientLike {
-  if (sharedClient && sharedClient.apiKey === apiKey) return sharedClient.client;
-  const client = new Groq({ apiKey, maxRetries: 0 }) as unknown as GroqClientLike;
-  sharedClient = { apiKey, client };
+  const baseURL = getBaseUrl();
+  const key = `${apiKey}\u0000${baseURL ?? ""}`;
+  if (sharedClient && sharedClient.key === key) return sharedClient.client;
+  const client = new Groq({
+    apiKey,
+    baseURL,
+    maxRetries: 0,
+    // Only rewrite when pointed at a non-Groq gateway.
+    ...(baseURL ? { fetch: gatewayFetch } : {}),
+  }) as unknown as GroqClientLike;
+  sharedClient = { key, client };
   return client;
 }
 
-/** True when the server has a Groq API key available. */
+/** True when the server has an AI provider API key available. */
 export function isGroqConfigured(): boolean {
   return Boolean(process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.trim().length > 0);
 }

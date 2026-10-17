@@ -3,6 +3,7 @@ export * from "./auth";
 export * from "./assessment";
 export * from "./assignments";
 export * from "./workspace";
+export * from "./execution";
 export * from "./evidence";
 export * from "./evaluation";
 export * from "./reports";

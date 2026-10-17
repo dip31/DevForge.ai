@@ -1172,6 +1172,60 @@
   margin-top: 2px;
   color: #647084;
 }
+.coach-processing {
+  flex-wrap: wrap;
+}
+.coach-steps {
+  flex-basis: 100%;
+  list-style: none;
+  margin: 4px 0 0 23px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.coach-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #8d9bb0;
+  font-size: 8px;
+  animation: ws-fade-in 0.25s ease;
+}
+.coach-step > span {
+  flex: none;
+  min-width: 58px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #9fb0c9;
+  font-size: 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+.coach-step.writing > span {
+  background: rgba(78, 202, 154, 0.14);
+  color: var(--ws-green);
+}
+.coach-step.deleting > span {
+  background: rgba(224, 92, 92, 0.14);
+  color: var(--ws-red);
+}
+.coach-step.analyzing > span {
+  background: rgba(120, 167, 238, 0.14);
+  color: #78a7ee;
+}
+@keyframes ws-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
 @keyframes ws-spin {
   to {
     transform: rotate(360deg);
@@ -1457,6 +1511,53 @@
 }
 .preview-canvas.mobile .task-preview-app {
   max-width: 280px;
+}
+.preview-panel > header select.preview-entry {
+  max-width: 190px;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--ws-border);
+  border-radius: 4px;
+  color: #c3ccda;
+  background: var(--ws-panel-3);
+  font-size: 7px;
+}
+.preview-canvas.empty {
+  align-items: center;
+  justify-content: center;
+}
+.preview-canvas.live {
+  align-items: stretch;
+  justify-content: stretch;
+  overflow: hidden;
+  padding: 0;
+  background: #0b0f16;
+}
+.preview-stage {
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+}
+.preview-canvas.mobile.live {
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.preview-canvas.mobile .preview-stage {
+  width: 390px;
+  max-width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid #2a3547;
+  border-radius: 12px;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.35);
+}
+.preview-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #ffffff;
 }
 .preview-running {
   display: flex;
@@ -1788,6 +1889,178 @@
 .test-results > div > span {
   font-size: 7px;
   text-transform: uppercase;
+}
+.test-actions {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px 9px;
+  border-top: none !important;
+}
+.test-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--ws-border-soft);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #b5c0d0;
+  font-size: 8px;
+  cursor: pointer;
+}
+.test-actions button:hover:not(:disabled) {
+  border-color: #78a7ee;
+  color: #dbe4ef;
+}
+.test-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.test-source {
+  color: #78a7ee;
+  font-size: 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.test-ai-summary {
+  margin: 0;
+  padding: 6px 7px;
+  border-top: 1px solid var(--ws-border-soft);
+  color: #8d9bb0;
+  font-size: 8px;
+  line-height: 1.5;
+}
+.test-case-io {
+  margin-top: 3px !important;
+}
+.test-case-io code {
+  color: #9fb0c9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.execution-runner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px;
+}
+.execution-runner-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.execution-runner-stdin {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.execution-runner-stdin > span {
+  color: #647084;
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.execution-runner-stdin textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid var(--ws-border-soft);
+  border-radius: 6px;
+  background: #0d1117;
+  color: #cdd6e2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+}
+.execution-runner-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.execution-runner-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  background: var(--ws-green);
+  color: #08110d;
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.execution-runner-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.execution-runner-actions > span {
+  color: #647084;
+  font-size: 8px;
+}
+.execution-runner-actions code {
+  color: #9fb0c9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.execution-output {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.execution-output-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: #647084;
+  font-size: 8px;
+}
+.execution-output-meta code {
+  color: #9fb0c9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.execution-output-meta .run-completed {
+  color: var(--ws-green);
+  text-transform: uppercase;
+}
+.execution-output-meta .run-failed,
+.execution-output-meta .run-timeout,
+.execution-output-meta .run-error {
+  color: var(--ws-red);
+  text-transform: uppercase;
+}
+.execution-output-meta .warning {
+  color: var(--ws-amber, #d8a657);
+}
+.execution-output-streams > div {
+  margin-bottom: 8px;
+}
+.execution-output-streams > div > span {
+  display: block;
+  margin-bottom: 3px;
+  color: #647084;
+  font-size: 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.execution-output-streams pre {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--ws-border-soft);
+  border-radius: 6px;
+  background: #0d1117;
+  color: #cdd6e2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.execution-output-streams pre.has-error {
+  color: #f0a6a6;
+  border-color: rgba(224, 92, 92, 0.35);
 }
 .activity-console > div {
   display: grid;

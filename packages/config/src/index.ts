@@ -51,6 +51,9 @@ export const envSchema = z.object({
   // When GROQ_API_KEY is set the AI Coach calls Groq's OpenAI-compatible API.
   // Never expose the key to the browser; it is only used by the API server.
   GROQ_API_KEY: z.string().min(1).optional(),
+  // Override the chat-completions base URL to use any OpenAI-compatible gateway
+  // (e.g. OpenRouter: https://openrouter.ai/api/v1). Unset = Groq's default.
+  GROQ_BASE_URL: z.string().url().optional(),
   GROQ_MODEL: z.string().min(1).default("openai/gpt-oss-20b"),
   GROQ_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   GROQ_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().max(32768).default(1024),

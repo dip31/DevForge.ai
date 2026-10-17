@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityEvent,
   AssessmentSession,
@@ -10,8 +10,11 @@ import {
   WorkspaceFile,
   AgentOperationView,
 } from "./data";
-import { aiCoachApi, aiAgentApi } from "./lib/api-endpoints";
-import { isApiError, getErrorMessage } from "./lib/api";
+import { aiCoachApi, aiAgentApi, previewApi } from "./lib/api-endpoints";
+import { streamAgentRun } from "./lib/agent-stream";
+import { bundleHtmlDocument, findHtmlEntry, listHtmlFiles } from "./lib/preview";
+import { isApiError, getErrorMessage, API_BASE_URL } from "./lib/api";
+import type { AgentStreamEvent } from "@contracts/execution";
 import type { AiCoachContext } from "@contracts/ai";
 import type { AgentOperation } from "@contracts/agent";
 import { generateCoachResponse, type CoachAction } from "@contracts/coach";
@@ -939,59 +942,113 @@ export function buildCoachContext(session: AssessmentSession): AiCoachContext {
   };
 }
 
-type PreviewTask = {
-  id: number;
-  title: string;
-  priority: string;
-  completed: boolean;
-};
-
 export function LivePreview({
+  sessionId,
+  files,
   runKey,
   running,
-  onRun,
 }: {
+  sessionId: string;
+  files: WorkspaceFile[];
   runKey: number;
   running: boolean;
-  onRun: () => void;
 }) {
-  const [tasks, setTasks] = useState<PreviewTask[]>([
-    {
-      id: 1,
-      title: "Review acceptance criteria",
-      priority: "high",
-      completed: true,
-    },
-    {
-      id: 2,
-      title: "Implement status filters",
-      priority: "medium",
-      completed: false,
-    },
-  ]);
-  const [title, setTitle] = useState("");
-  const [priority, setPriority] = useState("medium");
-  const [filter, setFilter] = useState("all");
+  const htmlFiles = useMemo(() => listHtmlFiles(files), [files]);
+  const [entry, setEntry] = useState<string | null>(() => findHtmlEntry(files));
   const [viewport, setViewport] = useState<"desktop" | "mobile">("desktop");
+  const [reloadKey, setReloadKey] = useState(0);
+  const [srcUrl, setSrcUrl] = useState("");
+  const [srcDoc, setSrcDoc] = useState("");
+  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [message, setMessage] = useState<string | null>(null);
+
   useEffect(() => {
-    setFilter("all");
-  }, [runKey]);
-  const visible = tasks.filter(
-    (task) => filter === "all" || (filter === "completed" ? task.completed : !task.completed),
-  );
-  const add = (event: FormEvent) => {
-    event.preventDefault();
-    if (!title.trim()) return;
-    setTasks([...tasks, { id: Date.now(), title: title.trim(), priority, completed: false }]);
-    setTitle("");
-  };
+    setEntry((previous) => {
+      const stillExists = previous && files.some((file) => file.path === previous);
+      return stillExists ? previous : findHtmlEntry(files);
+    });
+  }, [files]);
+
+  const empty = !entry;
+
+  // Publish the current workspace to the server, which serves it over HTTP so
+  // ES modules, relative imports and assets resolve like a real browser. If the
+  // API is unreachable we fall back to inlining the document into the iframe.
+  useEffect(() => {
+    if (!entry) {
+      setSrcUrl("");
+      setSrcDoc("");
+      setStatus("idle");
+      setMessage(null);
+      return;
+    }
+
+    let cancelled = false;
+    setStatus("loading");
+    const handle = window.setTimeout(async () => {
+      try {
+        const { token, entry: resolved } = (await previewApi.create(sessionId, {
+          files: files.map((file) => ({ path: file.path, content: file.content })),
+          entry,
+        })).data;
+        if (cancelled) return;
+        setSrcUrl(
+          `${API_BASE_URL}/api/v1/preview/${token}/${resolved
+            .split("/")
+            .map(encodeURIComponent)
+            .join("/")}`,
+        );
+        setSrcDoc("");
+        setStatus("ready");
+        setMessage(null);
+      } catch (error) {
+        if (cancelled) return;
+        const fallback = bundleHtmlDocument(files, entry);
+        if (fallback) {
+          setSrcUrl("");
+          setSrcDoc(fallback);
+          setStatus("ready");
+          setMessage(
+            isApiError(error)
+              ? `Offline preview — ${getErrorMessage(error)}`
+              : "Offline preview — the preview server was unreachable.",
+          );
+        } else {
+          setStatus("error");
+          setMessage(getErrorMessage(error));
+        }
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [sessionId, files, entry, runKey, reloadKey]);
+
   return (
     <section className="preview-panel">
       <header>
         <div>
           <WIcon name="eye" />
           <strong>Preview</strong>
-          <span>Demo adapter</span>
+          {htmlFiles.length > 1 ? (
+            <select
+              className="preview-entry"
+              value={entry ?? ""}
+              onChange={(event) => setEntry(event.target.value)}
+              title="Entry page"
+              aria-label="Preview entry page"
+            >
+              {htmlFiles.map((file) => (
+                <option value={file.path} key={file.path}>
+                  {file.path}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span>{entry ?? "No page"}</span>
+          )}
         </div>
         <div>
           <button
@@ -1008,90 +1065,60 @@ export function LivePreview({
           >
             M
           </button>
-          <button onClick={onRun} disabled={running} title="Run and refresh preview">
+          <button
+            onClick={() => setReloadKey((value) => value + 1)}
+            disabled={empty}
+            title="Reload preview"
+          >
             <WIcon name="refresh" size={13} />
           </button>
         </div>
       </header>
-      <div className={`preview-canvas ${viewport}`}>
+      <div className={`preview-canvas ${viewport} ${empty ? "empty" : "live"}`}>
         {running ? (
           <div className="preview-running">
             <i></i>
-            <span>Refreshing supported preview…</span>
+            <span>Running…</span>
+          </div>
+        ) : empty ? (
+          <div className="preview-empty">
+            <WIcon name="eye" />
+            <strong>No preview yet</strong>
+            <span>Add an index.html to preview your web project here.</span>
+          </div>
+        ) : status === "error" ? (
+          <div className="preview-empty">
+            <WIcon name="eye" />
+            <strong>Preview unavailable</strong>
+            <span>{message ?? "Could not build the preview."}</span>
           </div>
         ) : (
-          <div className="task-preview-app">
-            <div className="preview-app-head">
-              <div>
-                <span>Nova team</span>
-                <h2>Task manager</h2>
+          <div className="preview-stage">
+            {status === "loading" && (
+              <div className="preview-running">
+                <i></i>
+                <span>Building preview…</span>
               </div>
-              <span>{tasks.filter((task) => !task.completed).length} open</span>
-            </div>
-            <form onSubmit={add}>
-              <input
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder="Add a team task…"
-                aria-label="Task title"
-              />
-              <select
-                value={priority}
-                onChange={(event) => setPriority(event.target.value)}
-                aria-label="Task priority"
-              >
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-              <button type="submit">
-                <WIcon name="plus" />
-              </button>
-            </form>
-            <div className="preview-filters">
-              {["all", "active", "completed"].map((item) => (
-                <button
-                  className={filter === item ? "active" : ""}
-                  onClick={() => setFilter(item)}
-                  key={item}
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-            <div className="preview-task-list">
-              {visible.length ? (
-                visible.map((task) => (
-                  <label key={task.id}>
-                    <input
-                      type="checkbox"
-                      checked={task.completed}
-                      onChange={() =>
-                        setTasks(
-                          tasks.map((item) =>
-                            item.id === task.id ? { ...item, completed: !item.completed } : item,
-                          ),
-                        )
-                      }
-                    />
-                    <span className={task.completed ? "done" : ""}>{task.title}</span>
-                    <i className={task.priority}>{task.priority}</i>
-                  </label>
-                ))
-              ) : (
-                <div className="preview-empty">
-                  <WIcon name="check" />
-                  <strong>Nothing here</strong>
-                  <span>No tasks match this filter.</span>
-                </div>
-              )}
-            </div>
+            )}
+            <iframe
+              key={`${runKey}-${reloadKey}-${entry}-${status === "ready" ? "r" : "l"}`}
+              className="preview-frame"
+              title="Web project preview"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
+              referrerPolicy="no-referrer"
+              src={srcUrl || undefined}
+              srcDoc={srcUrl ? undefined : srcDoc || undefined}
+            />
           </div>
         )}
       </div>
       <footer>
         <WIcon name="info" />
-        <span>Interactive predefined adapter. Edited JavaScript is not executed.</span>
+        <span>
+          {empty
+            ? "Renders HTML/CSS/JS projects from your workspace files."
+            : message ?? "Live preview of your workspace, served over HTTP so modules and assets load."}
+        </span>
       </footer>
     </section>
   );
@@ -1246,6 +1273,9 @@ export function CoachPanel({
     "idle",
   );
   const [coachModel, setCoachModel] = useState("");
+  // Live steps streamed from the server while the coding agent runs. Each entry
+  // is a real tool call the backend executed; cleared when the run settles.
+  const [liveSteps, setLiveSteps] = useState<Array<{ phase: string; detail: string }>>([]);
   // Guards against duplicate submissions: React state updates are async, so a
   // double-click could otherwise fire two overlapping runs before `processing`
   // renders. A ref flips synchronously.
@@ -1412,73 +1442,103 @@ export function CoachPanel({
         content: message.content,
       }))
       .filter((turn) => turn.content.trim().length > 0);
+    setLiveSteps([]);
     let response: CoachMessage;
+    let terminal: AgentStreamEvent | null = null;
+    let streamError: AgentStreamEvent | null = null;
     try {
-      const { data } = await aiAgentApi.run(session.sessionId, {
-        prompt: request,
-        context,
-        history,
-      });
-      const operations: AgentOperationView[] = (data.operations ?? []).map((op) => ({
-        id: op.id,
-        kind: op.kind,
-        path: op.path,
-        content: op.content ?? null,
-        status: op.status,
-        requiresApproval: op.requiresApproval,
-        error: op.error ?? null,
-      }));
-      response = {
-        id: data.id,
-        role: "coach",
-        content: data.content,
-        timestamp: data.createdAt,
-        provider: data.provider,
-        model: data.model,
-        operations,
-        persisted: data.persisted,
-        stopReason: data.stopReason,
-      };
-      setCoachStatus(data.provider === "groq" ? "groq" : "preview");
-      setCoachModel(data.model);
-      // Reflect completed file changes in the IDE immediately.
-      const applied = operations.filter(
-        (op) =>
-          op.status === "applied" &&
-          (op.kind === "create_file" || op.kind === "edit_file") &&
-          typeof op.content === "string",
+      await streamAgentRun(
+        session.sessionId,
+        { prompt: request, context, history },
+        {
+          onEvent: (event) => {
+            if (event.type === "step") {
+              setLiveSteps((steps) => [...steps, { phase: event.phase, detail: event.detail }]);
+            } else if (event.type === "done") {
+              terminal = event;
+            } else {
+              streamError = event;
+            }
+          },
+        },
       );
-      if (applied.length > 0) {
-        update((latest) => {
-          const files = [...latest.files];
-          for (const op of applied) {
-            const index = files.findIndex((file) => file.path === op.path);
-            if (index >= 0) files[index] = { ...files[index], content: op.content as string };
-            else
-              files.push({
-                path: op.path,
-                content: op.content as string,
-                language: languageExt(op.path),
-              });
-          }
-          return {
-            ...latest,
-            files,
-            currentFile: applied[applied.length - 1].path,
-            unsaved: true,
-            activity: [
-              ...latest.activity,
-              {
-                id: uid("event"),
-                type: "code_changed",
-                timestamp: now(),
-                file: applied.map((op) => op.path).join(", "),
-                detail: `AI agent applied ${applied.length} file change(s).`,
-                provenance: "system_generated" as const,
-              },
-            ],
-          };
-        });
+      const result = terminal as AgentStreamEvent | null;
+      if (!result) {
+        const message =
+          (streamError as AgentStreamEvent | null)?.detail ??
+          "The agent stream ended without a result.";
+        response = {
+          id: uid("message"),
+          role: "coach",
+          content: `AI Agent error: ${message}`,
+          timestamp: now(),
+          isError: true,
+          retryAction: "agent",
+          retryText: text,
+        };
+        setCoachStatus("error");
+      } else {
+        const operations: AgentOperationView[] = (result.operations ?? []).map((op) => ({
+          id: op.id,
+          kind: op.kind,
+          path: op.path,
+          content: op.content ?? null,
+          status: op.status,
+          requiresApproval: op.requiresApproval,
+          error: op.error ?? null,
+        }));
+        response = {
+          id: uid("message"),
+          role: "coach",
+          content: result.content ?? "The agent completed without a summary.",
+          timestamp: now(),
+          provider: "groq",
+          model: result.model ?? undefined,
+          operations,
+          persisted: result.persisted ?? false,
+          stopReason: result.stopReason ?? "completed",
+        };
+        setCoachStatus("groq");
+        setCoachModel(result.model ?? "");
+        // Reflect completed file changes in the IDE immediately.
+        const applied = operations.filter(
+          (op) =>
+            op.status === "applied" &&
+            (op.kind === "create_file" || op.kind === "edit_file") &&
+            typeof op.content === "string",
+        );
+        if (applied.length > 0) {
+          update((latest) => {
+            const files = [...latest.files];
+            for (const op of applied) {
+              const index = files.findIndex((file) => file.path === op.path);
+              if (index >= 0) files[index] = { ...files[index], content: op.content as string };
+              else
+                files.push({
+                  path: op.path,
+                  content: op.content as string,
+                  language: languageExt(op.path),
+                });
+            }
+            return {
+              ...latest,
+              files,
+              currentFile: applied[applied.length - 1].path,
+              unsaved: true,
+              activity: [
+                ...latest.activity,
+                {
+                  id: uid("event"),
+                  type: "code_changed",
+                  timestamp: now(),
+                  file: applied.map((op) => op.path).join(", "),
+                  detail: `AI agent applied ${applied.length} file change(s).`,
+                  provenance: "system_generated" as const,
+                },
+              ],
+            };
+          });
+        }
       }
     } catch (error) {
       if (isApiError(error)) {
@@ -1521,6 +1581,7 @@ export function CoachPanel({
       ],
     }));
     setProcessing("");
+    setLiveSteps([]);
     inFlightRef.current = false;
   };
   const approveOperations = async (message: CoachMessage) => {
@@ -1811,6 +1872,16 @@ export function CoachPanel({
               <strong>AI Coach is working</strong>
               <small>{processing}</small>
             </span>
+            {liveSteps.length > 0 && (
+              <ol className="coach-steps">
+                {liveSteps.map((step, index) => (
+                  <li className={`coach-step ${step.phase}`} key={`${index}-${step.detail}`}>
+                    <span>{step.phase}</span>
+                    {step.detail}
+                  </li>
+                ))}
+              </ol>
+            )}
           </div>
         )}
       </div>
@@ -2251,7 +2322,12 @@ export function CodingWorkspace({
                 </button>
               </div>
             </div>
-            <LivePreview runKey={runKey} running={running} onRun={run} />
+            <LivePreview
+              sessionId={current.sessionId}
+              files={current.files}
+              runKey={runKey}
+              running={running}
+            />
           </div>
           <ExecutionPanel
             session={current}

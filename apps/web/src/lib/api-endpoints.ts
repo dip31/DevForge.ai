@@ -44,6 +44,13 @@ import type {
   AiCoachHistoryMessage,
 } from "@contracts/ai";
 import type { AgentResponse, AgentOperation, ApplyOperationsResponse } from "@contracts/agent";
+import type {
+  ExecuteLanguage,
+  ExecutionFile,
+  ExecutionResult,
+  GeneratedTestFile,
+  TestCaseResult,
+} from "@contracts/execution";
 import type { OrganizationWithRole, CreateOrganizationRequest } from "@contracts/auth";
 
 export type AppProfile = {
@@ -447,6 +454,62 @@ export const aiAgentApi = {
     api.post<{ success: true; data: ApplyOperationsResponse }>(
       `/api/v1/sessions/${sessionId}/ai-agent/apply`,
       { operations },
+    ),
+};
+
+export type AiTestsResponse = {
+  testFiles: GeneratedTestFile[];
+  cases: TestCaseResult[];
+  summary: string;
+  language: ExecuteLanguage;
+  entry: string;
+  provider: string;
+  model: string;
+  run: ExecutionResult;
+};
+
+export const executionApi = {
+  run: (
+    sessionId: string,
+    data: {
+      files: ExecutionFile[];
+      entry: string;
+      language?: ExecuteLanguage;
+      stdin?: string;
+      timeoutMs?: number;
+    },
+  ) =>
+    api.post<{ success: true; data: ExecutionResult }>(
+      `/api/v1/sessions/${sessionId}/execute`,
+      data,
+    ),
+};
+
+export const aiTestsApi = {
+  generate: (
+    sessionId: string,
+    data: {
+      files: ExecutionFile[];
+      entry?: string;
+      instructions?: string | null;
+      requirements?: string[];
+      timeoutMs?: number;
+    },
+  ) =>
+    api.post<{ success: true; data: AiTestsResponse }>(
+      `/api/v1/sessions/${sessionId}/ai-tests`,
+      data,
+    ),
+};
+
+export const previewApi = {
+  create: (
+    sessionId: string,
+    data: { files: ExecutionFile[]; entry?: string },
+  ) =>
+    api.post<{ success: true; data: { token: string; entry: string } }>(
+      `/api/v1/sessions/${sessionId}/preview`,
+      data,
     ),
 };
 

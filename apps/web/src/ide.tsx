@@ -7,6 +7,8 @@ import {
   WorkspaceFile,
 } from "./data";
 import { analyzeTests, CoachPanel, LivePreview, Timer, UpdateSession, WIcon } from "./assessment";
+import { aiTestsApi, executionApi } from "./lib/api-endpoints";
+import { getErrorMessage } from "./lib/api";
 
 type PersistSession = (session: AssessmentSession) => boolean;
 type ActivityId = "explorer" | "task" | "search" | "source" | "run" | "extensions";
@@ -967,6 +969,15 @@ function BottomPanel({
   ui,
   setUi,
   runTests,
+  run,
+  running,
+  stdin,
+  setStdin,
+  execError,
+  aiTestsLoading,
+  aiTestsError,
+  runAiTests,
+  canRun,
   recordTerminalEvent,
   closePanel,
 }: {
@@ -974,6 +985,15 @@ function BottomPanel({
   ui: WorkspaceUiState;
   setUi: React.Dispatch<React.SetStateAction<WorkspaceUiState>>;
   runTests: () => ReturnType<typeof analyzeTests>;
+  run: () => void;
+  running: boolean;
+  stdin: string;
+  setStdin: (value: string) => void;
+  execError: string;
+  aiTestsLoading: boolean;
+  aiTestsError: string;
+  runAiTests: () => void;
+  canRun: boolean;
   recordTerminalEvent: (
     type: "terminal_created" | "terminal_command_entered",
     detail: string,
@@ -1201,20 +1221,86 @@ function BottomPanel({
             </form>
           </div>
         )}
-        {ui.bottomTab === "output" &&
-          (latestRun ? (
-            <div className={`output-line ${latestRun.status}`}>
-              <span>{new Date(latestRun.timestamp).toLocaleTimeString()}</span>
-              <WIcon name={latestRun.status === "success" ? "check" : "warning"} />
-              <p>
-                <strong>Supported preview adapter refreshed</strong>
-                {latestRun.message}
-              </p>
-              <code>{latestRun.revisionId}</code>
+        {ui.bottomTab === "output" && (
+          <div className="execution-runner">
+            <div className="execution-runner-controls">
+              <label className="execution-runner-stdin">
+                <span>Program stdin</span>
+                <textarea
+                  value={stdin}
+                  onChange={(event) => setStdin(event.target.value)}
+                  placeholder="Optional input piped to the program's standard input"
+                  spellCheck={false}
+                  rows={2}
+                />
+              </label>
+              <div className="execution-runner-actions">
+                <button onClick={run} disabled={running || !canRun}>
+                  <WIcon name={running ? "stop" : "play"} />
+                  {running ? "Running…" : "Run Program"}
+                </button>
+                <span>
+                  Entry: <code>{session.currentFile}</code>
+                </span>
+              </div>
             </div>
-          ) : (
-            <div className="execution-empty">No application run yet.</div>
-          ))}
+            {execError && (
+              <div className="problem-line">
+                <WIcon name="warning" />
+                <p>
+                  <strong>Execution failed</strong>
+                  {execError}
+                </p>
+                <span>runner</span>
+              </div>
+            )}
+            {latestRun?.execution ? (
+              <div className="execution-output">
+                <div className="execution-output-meta">
+                  <span className={`run-${latestRun.execution.status}`}>
+                    {latestRun.execution.status}
+                  </span>
+                  <span>
+                    exit <code>{latestRun.execution.exitCode ?? "—"}</code>
+                  </span>
+                  <span>
+                    signal <code>{latestRun.execution.signal ?? "—"}</code>
+                  </span>
+                  <span>
+                    {latestRun.execution.language} · {latestRun.execution.durationMs}ms
+                  </span>
+                  {latestRun.execution.truncated && <span className="warning">output truncated</span>}
+                </div>
+                <div className="execution-output-streams">
+                  <div>
+                    <span>stdout</span>
+                    <pre>{latestRun.execution.stdout || "(no stdout)"}</pre>
+                  </div>
+                  <div>
+                    <span>stderr</span>
+                    <pre className={latestRun.execution.stderr ? "has-error" : ""}>
+                      {latestRun.execution.stderr || "(no stderr)"}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            ) : latestRun ? (
+              <div className={`output-line ${latestRun.status}`}>
+                <span>{new Date(latestRun.timestamp).toLocaleTimeString()}</span>
+                <WIcon name={latestRun.status === "success" ? "check" : "warning"} />
+                <p>
+                  <strong>Run recorded</strong>
+                  {latestRun.message}
+                </p>
+                <code>{latestRun.revisionId}</code>
+              </div>
+            ) : (
+              <div className="execution-empty">
+                No application run yet. Press Run to execute your code for real.
+              </div>
+            )}
+          </div>
+        )}
         {ui.bottomTab === "problems" &&
           (problems.length ? (
             problems.map((result) => (
@@ -1230,31 +1316,69 @@ function BottomPanel({
           ) : (
             <div className="execution-empty">No supported diagnostics.</div>
           ))}
-        {ui.bottomTab === "tests" &&
-          (latestTests ? (
-            <div className="test-results">
-              <div className="test-summary">
-                <span className="passed">
-                  {latestTests.results.filter((result) => result.status === "passed").length} passed
-                </span>
-                <span className="failed">{problems.length} failed</span>
-                <span>{latestTests.revisionId}</span>
-                <span>{new Date(latestTests.timestamp).toLocaleTimeString()}</span>
-              </div>
-              {latestTests.results.map((result) => (
-                <div className={result.status} key={result.id}>
-                  <WIcon name={result.status === "passed" ? "check" : "x"} />
-                  <p>
-                    <strong>{result.name}</strong>
-                    <small>{result.diagnostic}</small>
-                  </p>
-                  <span>{result.status}</span>
-                </div>
-              ))}
+        {ui.bottomTab === "tests" && (
+          <div className="test-results">
+            <div className="test-actions">
+              <button onClick={runAiTests} disabled={aiTestsLoading || !canRun}>
+                <WIcon name="ai" />
+                {aiTestsLoading ? "Generating…" : "Generate AI Tests"}
+              </button>
+              <button onClick={runTests} disabled={!canRun}>
+                <WIcon name="test" />
+                Run Deterministic Checks
+              </button>
+              {latestTests?.source === "ai" && <span className="test-source">AI-generated</span>}
             </div>
-          ) : (
-            <div className="execution-empty">No deterministic test run yet.</div>
-          ))}
+            {aiTestsError && (
+              <div className="problem-line">
+                <WIcon name="warning" />
+                <p>
+                  <strong>AI test generation failed</strong>
+                  {aiTestsError}
+                </p>
+                <span>runner</span>
+              </div>
+            )}
+            {latestTests ? (
+              <>
+                <div className="test-summary">
+                  <span className="passed">
+                    {latestTests.results.filter((result) => result.status === "passed").length} passed
+                  </span>
+                  <span className="failed">
+                    {latestTests.results.filter((result) => result.status === "failed").length} failed
+                  </span>
+                  <span>{latestTests.revisionId}</span>
+                  <span>{new Date(latestTests.timestamp).toLocaleTimeString()}</span>
+                </div>
+                {latestTests.source === "ai" && latestTests.summary && (
+                  <p className="test-ai-summary">{latestTests.summary}</p>
+                )}
+                {latestTests.results.map((result) => (
+                  <div className={result.status} key={result.id}>
+                    <WIcon name={result.status === "passed" ? "check" : "x"} />
+                    <p>
+                      <strong>{result.name}</strong>
+                      <small>{result.diagnostic}</small>
+                      {result.input !== undefined && (
+                        <small className="test-case-io">
+                          input: <code>{result.input || "—"}</code> · expected:{" "}
+                          <code>{result.expected || "—"}</code> · actual:{" "}
+                          <code>{result.actual || "—"}</code>
+                        </small>
+                      )}
+                    </p>
+                    <span>{result.status}</span>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <div className="execution-empty">
+                No test run yet. Generate AI tests or run the deterministic checks.
+              </div>
+            )}
+          </div>
+        )}
         {ui.bottomTab === "activity" && (
           <div className="activity-console">
             {[...session.activity].reverse().map((event) => (
@@ -1289,6 +1413,10 @@ export default function IdeWorkspace({
   const [resetOpen, setResetOpen] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [timerExpired, setTimerExpired] = useState(false);
+  const [stdin, setStdin] = useState("");
+  const [execError, setExecError] = useState("");
+  const [aiTestsLoading, setAiTestsLoading] = useState(false);
+  const [aiTestsError, setAiTestsError] = useState("");
 
   const fallbackAssignment = candidateAssignments.find((a) => a.id === session.assignmentId);
   const companyName = session.taskDetails?.company || fallbackAssignment?.company || "DevForge";
@@ -1390,13 +1518,33 @@ export default function IdeWorkspace({
     setUi((state) => ({ ...state, bottomOpen: true, bottomTab: tab }));
     if (!wasOpen) record("panel_opened", `Opened bottom ${tab} panel.`);
   };
-  const run = () => {
+  const run = async () => {
+    if (running) return;
     const saved = ensureRevision();
     const revisionId = saved.revisions.at(-1)?.id ?? "revision-0";
+    const entry = saved.currentFile;
+    if (/\.html?$/i.test(entry)) {
+      setUi((state) => ({ ...state, previewOpen: true }));
+      setRunKey((key) => key + 1);
+      return;
+    }
     setRunning(true);
-    window.setTimeout(() => {
+    setExecError("");
+    setUi((state) => ({ ...state, bottomOpen: true, bottomTab: "output" }));
+    try {
+      const { data } = await executionApi.run(session.sessionId, {
+        files: saved.savedFiles.map((file) => ({ path: file.path, content: file.content })),
+        entry,
+        stdin: stdin || undefined,
+      });
       const timestamp = now();
       const resultId = uid("run");
+      const ok = data.status === "completed";
+      const summary = ok
+        ? `Executed ${data.entry} — completed in ${data.durationMs}ms (exit 0).`
+        : `Executed ${data.entry} — ${data.status}${
+            data.exitCode === null ? "" : ` (exit ${data.exitCode})`
+          } in ${data.durationMs}ms.`;
       update((active) => ({
         ...active,
         runHistory: [
@@ -1405,8 +1553,20 @@ export default function IdeWorkspace({
             id: resultId,
             timestamp,
             revisionId,
-            status: "success",
-            message: "Supported preview adapter refreshed. Arbitrary source was not executed.",
+            status: ok ? "success" : "error",
+            message: summary,
+            execution: {
+              status: data.status,
+              exitCode: data.exitCode,
+              signal: data.signal,
+              stdout: data.stdout,
+              stderr: data.stderr,
+              truncated: data.truncated,
+              durationMs: data.durationMs,
+              language: data.language,
+              entry: data.entry,
+              timedOut: data.timedOut,
+            },
           },
         ],
         activity: [
@@ -1417,19 +1577,19 @@ export default function IdeWorkspace({
             timestamp,
             revisionId,
             resultId,
-            detail: `Ran the supported ${session.taskDetails?.title || fallbackAssignment?.task || "assessment"} preview adapter.`,
+            detail: `Executed ${data.entry} in the sandbox: ${data.status}${
+              data.exitCode === null ? "" : ` (exit ${data.exitCode})`
+            }.`,
             provenance: "candidate_action",
           },
         ],
       }));
+    } catch (error) {
+      setExecError(getErrorMessage(error));
+    } finally {
       setRunning(false);
       setRunKey((key) => key + 1);
-      setUi((state) => ({
-        ...state,
-        bottomOpen: true,
-        bottomTab: "output",
-      }));
-    }, 450);
+    }
   };
   const runTests = () => {
     const saved = ensureRevision();
@@ -1459,6 +1619,66 @@ export default function IdeWorkspace({
       bottomTab: "tests",
     }));
     return results;
+  };
+  const runAiTests = async () => {
+    if (aiTestsLoading) return;
+    const saved = ensureRevision();
+    const revisionId = saved.revisions.at(-1)?.id ?? "revision-0";
+    setAiTestsLoading(true);
+    setAiTestsError("");
+    setUi((state) => ({ ...state, bottomOpen: true, bottomTab: "tests" }));
+    try {
+      const { data } = await aiTestsApi.generate(session.sessionId, {
+        files: saved.savedFiles.map((file) => ({ path: file.path, content: file.content })),
+        entry: saved.currentFile,
+        instructions: session.taskDetails?.instructions ?? null,
+        requirements: session.taskDetails?.requirements ?? [],
+      });
+      const results = data.cases.map((item) => ({
+        id: item.id,
+        name: item.name,
+        status: item.status,
+        diagnostic:
+          item.error ??
+          `input: ${item.input || "—"} · expected: ${item.expected || "—"} · actual: ${item.actual || "—"}`,
+        criterion: data.entry,
+        input: item.input,
+        expected: item.expected,
+        actual: item.actual,
+      }));
+      const timestamp = now();
+      const resultId = uid("aitests");
+      update((active) => ({
+        ...active,
+        testRuns: [
+          ...active.testRuns,
+          {
+            id: resultId,
+            timestamp,
+            revisionId,
+            results,
+            source: "ai",
+            summary: data.summary,
+          },
+        ],
+        activity: [
+          ...active.activity,
+          {
+            id: uid("event"),
+            type: "test_run",
+            timestamp,
+            revisionId,
+            resultId,
+            detail: `Ran AI-generated tests against ${data.entry}: ${results.filter((r) => r.status === "passed").length}/${results.length} passed.`,
+            provenance: "candidate_action",
+          },
+        ],
+      }));
+    } catch (error) {
+      setAiTestsError(getErrorMessage(error));
+    } finally {
+      setAiTestsLoading(false);
+    }
   };
   const openFile = (path: string) => {
     const file = currentRef.current.files.find((item) => item.path === path);
@@ -1680,6 +1900,14 @@ export default function IdeWorkspace({
             Run Tests
           </button>
           <button
+            onClick={runAiTests}
+            disabled={aiTestsLoading || !!current.submittedAt}
+            title="Generate test cases with AI and execute them against your code"
+          >
+            <WIcon name="ai" />
+            {aiTestsLoading ? "Generating…" : "AI Tests"}
+          </button>
+          <button
             className="submit-button"
             onClick={() => setSubmitOpen(true)}
             disabled={!!current.submittedAt || timerExpired}
@@ -1736,7 +1964,14 @@ export default function IdeWorkspace({
               }}
               resetFiles={resetFiles}
             />
-            {ui.previewOpen && <LivePreview runKey={runKey} running={running} onRun={run} />}
+            {ui.previewOpen && (
+              <LivePreview
+                sessionId={current.sessionId}
+                files={current.files}
+                runKey={runKey}
+                running={running}
+              />
+            )}
             {ui.agentOpen && <CoachPanel session={current} update={update} onClose={closeAgent} />}
           </div>
           {ui.bottomOpen && (
@@ -1745,6 +1980,15 @@ export default function IdeWorkspace({
               ui={ui}
               setUi={setUi}
               runTests={runTests}
+              run={run}
+              running={running}
+              stdin={stdin}
+              setStdin={setStdin}
+              execError={execError}
+              aiTestsLoading={aiTestsLoading}
+              aiTestsError={aiTestsError}
+              runAiTests={runAiTests}
+              canRun={!current.submittedAt}
               recordTerminalEvent={(type, detail, terminalId) =>
                 record(type, detail, { terminalId })
               }
@@ -1790,7 +2034,7 @@ export default function IdeWorkspace({
                 <span>Latest supported tests</span>
                 <strong>
                   {latestTest
-                    ? `${latestTest.results.filter((result) => result.status === "passed").length}/6 passed · ${latestTest.revisionId}`
+                    ? `${latestTest.results.filter((result) => result.status === "passed").length}/${latestTest.results.length} passed · ${latestTest.revisionId}`
                     : "Not run"}
                 </strong>
               </div>

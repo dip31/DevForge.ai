@@ -6,7 +6,7 @@ import {
   type SessionAccessFailure,
   type SessionAccessSuccess,
 } from "../services/sessionAccess";
-import { aiInteractions, aiUsageRecords } from "@database/schema";
+import { aiInteractions, aiProviderEnum, aiUsageRecords } from "@database/schema";
 import {
   agentRequestSchema,
   applyOperationsRequestSchema,
@@ -25,7 +25,13 @@ import {
   writeSessionFile,
   type WorkspaceStore,
 } from "../services/workspaceService";
-import { CoachProviderError, isGroqConfigured, GROQ_PROVIDER } from "../services/groqProvider";
+import {
+  CoachProviderError,
+  isGroqConfigured,
+  getGroqModel,
+  GROQ_PROVIDER,
+} from "../services/groqProvider";
+import type { AgentStreamEvent } from "@contracts/execution";
 import type { SessionAccessSuccess as SessionAccess } from "../services/sessionAccess";
 import {
   createOpenHandsAdapter,
@@ -41,7 +47,7 @@ const OPENHANDS_PROVIDER = "openhands";
 type PersistRunParams = {
   access: SessionAccessSuccess;
   sessionId: string;
-  provider: string;
+  provider: (typeof aiProviderEnum.enumValues)[number];
   model: string;
   prompt: string;
   content: string;
@@ -268,6 +274,138 @@ export async function aiAgentRoutes(fastify: FastifyInstance) {
       createdAt,
     };
     return reply.status(isPersisted ? 201 : 200).send({ success: true, data: response });
+  });
+
+  // POST /:sessionId/ai-agent/stream — same bounded agent loop, but streams the
+  // real tool-call steps to the client as Server-Sent Events so the chat can show
+  // progress live. Every step reflects a tool call the server actually executed.
+  fastify.post("/:sessionId/ai-agent/stream", async (request, reply) => {
+    const user = (request as any).user;
+    const { sessionId } = request.params as { sessionId: string };
+    const body = agentRequestSchema.parse(request.body ?? {});
+    const startedAt = Date.now();
+    const isPersisted = UUID_PATTERN.test(sessionId);
+
+    let access: SessionAccessSuccess | null = null;
+    let store: WorkspaceStore;
+    let taskContext = {
+      instructions: null as string | null,
+      requirements: [] as string[],
+      aiPolicy: null as string | null,
+    };
+
+    if (isPersisted) {
+      const result = await authorizeSessionAccess(sessionId, user.id, "write");
+      if (!result.ok) return fail(reply, result);
+      access = result;
+      const resolved = await resolveCoachContext(access, body.context ?? {});
+      if (resolved.policyBlocked) {
+        return errorReply(reply, 403, "AI_POLICY_BLOCKED", resolved.policyBlocked.message);
+      }
+      taskContext = {
+        instructions: resolved.context.instructions ?? null,
+        requirements: resolved.context.requirements ?? [],
+        aiPolicy: resolved.aiPolicy,
+      };
+      store = createDbWorkspaceStore(sessionId);
+    } else {
+      store = new MemoryWorkspaceStore(body.context?.files ?? []);
+      taskContext = {
+        instructions: body.context?.instructions ?? null,
+        requirements: body.context?.requirements ?? [],
+        aiPolicy: null,
+      };
+    }
+
+    if (!isGroqConfigured()) {
+      return errorReply(
+        reply,
+        503,
+        "AI_PROVIDER_UNAVAILABLE",
+        "The AI coding agent is not configured on this server.",
+      );
+    }
+
+    reply.hijack();
+    const raw = reply.raw;
+    // reply.hijack() bypasses onSend hooks, so @fastify/cors cannot add its
+    // headers to this response. Reflect the (already-preflighted) origin so the
+    // browser accepts the cross-origin stream.
+    const origin = request.headers.origin;
+    raw.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+      ...(origin
+        ? {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            Vary: "Origin",
+          }
+        : {}),
+    });
+    let closed = false;
+    raw.on("close", () => {
+      closed = true;
+    });
+    const send = (event: AgentStreamEvent) => {
+      if (closed) return;
+      raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    try {
+      const result = await runAgent({
+        store,
+        prompt: body.prompt,
+        history: body.history,
+        taskContext,
+        onEvent: send,
+      });
+
+      const latencyMs = Math.max(0, Date.now() - startedAt);
+      if (isPersisted && access) {
+        await persistAgentRun({
+          access,
+          sessionId,
+          provider: GROQ_PROVIDER,
+          model: result.model,
+          prompt: body.prompt,
+          content: result.content,
+          operations: result.operations,
+          latencyMs,
+          tokensUsed: result.tokensUsed,
+          metadata: { iterations: result.iterations, stopReason: result.stopReason },
+        });
+      }
+
+      send({
+        type: "done",
+        phase: "done",
+        detail: "Task completed",
+        content: result.content,
+        stopReason: result.stopReason,
+        tokensUsed: result.tokensUsed,
+        model: result.model,
+        persisted: isPersisted,
+        operations: result.operations,
+      });
+    } catch (error) {
+      const message =
+        error instanceof CoachProviderError
+          ? error.message
+          : "The AI provider request failed.";
+      send({
+        type: "error",
+        phase: "error",
+        detail: message,
+        stopReason: "provider_error",
+        model: getGroqModel(),
+        persisted: isPersisted,
+      });
+    } finally {
+      raw.end();
+    }
   });
 
   // POST /:sessionId/ai-agent/apply — apply the candidate-approved operations.

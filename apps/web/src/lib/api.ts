@@ -1,7 +1,7 @@
 import { getAuthHeader } from "./auth";
 import type { PaginationParams, PaginatedResponse } from "@contracts/common";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
+export const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
 
 interface RequestOptions extends RequestInit {
   params?: Record<string, string | number | boolean | undefined>;
