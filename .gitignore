@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+packages/*/dist/
+
+# Environment files — NEVER commit these
+.env
+.env.local
+.env.*.local
+apps/api/.env
+apps/web/.env
+apps/web/.env.local
+packages/config/.env
+
+# Supabase local config (contains DB passwords)
+supabase/.branches/
+supabase/seed.sql
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/settings.json
+
+# Test coverage
+coverage/
+.nyc_output/
